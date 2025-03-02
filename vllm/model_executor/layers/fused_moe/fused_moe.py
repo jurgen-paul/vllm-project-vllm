@@ -760,6 +760,8 @@ def invoke_fused_moe_kernel(A: torch.Tensor,
         )
 
     else:
+        print("GOT HERE B")
+
         fused_moe_kernel[grid](
             A,
             B,
