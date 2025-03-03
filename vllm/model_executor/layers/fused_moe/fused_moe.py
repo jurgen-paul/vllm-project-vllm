@@ -760,7 +760,7 @@ def invoke_fused_moe_kernel(A: torch.Tensor,
         )
 
     else:
-        #print(f"GOT HERE B {sorted_token_ids}, {expert_ids}")
+        #print(f"GOT HERE B {sorted_token_ids}")
         #print(f"B:\n{B}")
         #print(f"B_scale:\n{B_scale}")
 
