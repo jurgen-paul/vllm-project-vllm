@@ -760,8 +760,7 @@ def invoke_fused_moe_kernel(A: torch.Tensor,
         )
 
     else:
-        print(f"GOT HERE B {sorted_token_ids}, {expert_ids}")
-
+        #print(f"GOT HERE B {sorted_token_ids}, {expert_ids}")
         #print(f"B:\n{B}")
         #print(f"B_scale:\n{B_scale}")
 
@@ -1319,7 +1318,7 @@ def fused_experts_impl(hidden_states: torch.Tensor,
                                 use_int4_w4a16=use_int4_w4a16,
                                 block_shape=block_shape)
 
-        print(f"FUSED_MOE {intermediate_cache1.shape} {intermediate_cache1}")
+        #print(f"FUSED_MOE {intermediate_cache1.shape} {intermediate_cache1}")
 
         if activation == "silu":
             torch.ops._C.silu_and_mul(intermediate_cache2,
