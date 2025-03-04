@@ -787,7 +787,7 @@ def invoke_fused_moe_kernel(A: torch.Tensor,
         )
 
     else:
-        #print(f"GOT HERE B {sorted_token_ids}")
+        #print(f"GOT HERE B {sorted_token_ids.shape} {sorted_token_ids}")
         #print(f"B:\n{B}")
         #print(f"B_scale:\n{B_scale}")
 
@@ -1041,7 +1041,7 @@ def fused_topk(
     gating_output: torch.Tensor,
     topk: int,
     renormalize: bool,
-):
+) -> Tuple[torch.Tensor, torch.Tensor]:
     assert hidden_states.shape[0] == gating_output.shape[0], (
         "Number of tokens mismatch")
 
@@ -1064,6 +1064,7 @@ def fused_topk(
         topk_weights,
         topk_ids,
         token_expert_indicies,
+        # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
         gating_output.float(),  # TODO(woosuk): Optimize this.
     )
     del token_expert_indicies  # Not used. Will be used in the future.
@@ -1511,7 +1512,7 @@ def fused_moe(
         MoE layer.
     - num_expert_group: Optional[int]: additional parameter for grouped_topk
     - topk_group: Optional[int]: additional parameter for grouped_topk
-    - use_grouped_topk: If True, use grouped_topk instead of fused_topk
+    - use_grouped_topk: If True, use grouped_topk instead of fused_top
         note: Deepseekv2 model uses grouped_topk
     - use_fp8_w8a8 (bool): If True, use fp8 arithmetic to compute the inner
         products for w1 and w2. Defaults to False.
