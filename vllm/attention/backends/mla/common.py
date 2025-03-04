@@ -1085,7 +1085,6 @@ class MLACommonImpl(MLAAttentionImpl[T], Generic[T]):
                 v, [0, q.shape[-1] - v.shape[-1]], value=0)
 
         if is_hip and envs.VLLM_USE_TRITON_FLASH_ATTN:
-            assert return_softmax_lse is False
             attn_out = self.triton_fa_func(
                 q,
                 k,
@@ -1113,17 +1112,25 @@ class MLACommonImpl(MLAAttentionImpl[T], Generic[T]):
                 **kwargs,
             )
 
-        # Remain consistent with old `flash_attn_varlen_func` where there
-        # is only one output tensor if `return_softmax_lse` is False.
-        # only unpack if it is a tuple to avoid unpacking tensors by accident
+        # Unpack the output if there is multiple results,
+        # triton always returns (output, softmax_lse),
+        # vllm_flash_attn returns (output, softmax_lse) when
+        #  `return_softmax_lse = True`
+        # flash_attn (RoCM) returns (output, softmax_lse, ...) when
+        #  `return_attn_probs = True`
+        rest = None
         if isinstance(attn_out, tuple):
             attn_out, *rest = attn_out
-            # unpad if necessary
-            if self._pad_v:
-                attn_out = attn_out[..., :v.shape[-1]]
-            return attn_out, *rest
-        else:
-            return attn_out[..., :v.shape[-1]] if self._pad_v else attn_out
+
+        # unpad if necessary
+        if self._pad_v:
+            attn_out = attn_out[..., :v.shape[-1]]
+
+        # Remain consistent with old `flash_attn_varlen_func` where there
+        # is only one output tensor if `return_softmax_lse` is False.
+        if return_softmax_lse:
+            return attn_out, rest[0]
+        return attn_out
 
     def _v_up_proj_and_o_proj(self, x):
         if envs.VLLM_MLA_PERFORM_MATRIX_ABSORPTION:
@@ -1432,11 +1439,6 @@ class MLACommonImpl(MLAAttentionImpl[T], Generic[T]):
 
         k = torch.cat((k_nope, k_pe.expand((*k_nope.shape[:-1], -1))), dim=-1)
 
-        if has_context and not current_platform.is_cuda():
-            raise NotImplementedError(
-                "Chunked Prefill for MLA is not currently supported on"
-                "non-cuda platforms")
-
         output = self._flash_attn_varlen_diff_headdims(
             q=q,
             k=k,
@@ -1452,7 +1454,7 @@ class MLACommonImpl(MLAAttentionImpl[T], Generic[T]):
 
         if has_context:
             # ROCm flash_attn_varlen_func will return 3 objects instead of 2
-            suffix_output, suffix_lse, *rest = output
+            suffix_output, suffix_lse = output
             context_output, context_lse = self._compute_prefill_context( \
                 q, kv_c_and_k_pe_cache, attn_metadata)
 
