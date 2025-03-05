@@ -278,7 +278,7 @@ def fused_moe_kernel(
         # Block size for block-wise quantization
         group_n: tl.constexpr,
         group_k: tl.constexpr,
-        # Meta-parameters
+        # Meta-paramnneters
         BLOCK_SIZE_M: tl.constexpr,
         BLOCK_SIZE_N: tl.constexpr,
         BLOCK_SIZE_K: tl.constexpr,
@@ -634,6 +634,10 @@ def moe_align_block_size(
     num_tokens_post_pad = torch.empty((1),
                                       dtype=torch.int32,
                                       device=topk_ids.device)
+
+
+    print(f"topk {topk_ids.shape}, block_size: {block_size}, num_exp: {num_experts}, topk {topk_ids}")
+
     if num_experts >= 224:
         if envs.VLLM_ENABLE_MOE_ALIGN_BLOCK_SIZE_TRITON or num_experts != 256:
             moe_align_block_size_triton(
@@ -661,6 +665,11 @@ def moe_align_block_size(
         expert_ids = expert_map[expert_ids]
 
     return sorted_ids, expert_ids, num_tokens_post_pad
+
+
+def p(s, t):
+    print(f"{s}: {t.shape}, {t.dtype}\n{t}")
+    #pass
 
 
 def invoke_fused_moe_kernel(A: torch.Tensor,
@@ -760,7 +769,15 @@ def invoke_fused_moe_kernel(A: torch.Tensor,
         )
 
     else:
-        #print(f"GOT HERE B {sorted_token_ids.shape} {sorted_token_ids}")
+        print(f"{'SECOND' if mul_routed_weight else 'FIRST'} FUSED_GEMM")
+        print(f"E = {EM}")
+        p("A", A)
+        p("A_s", A_scale)
+        p("B", B)
+        p("B_s", B_scale)
+        p("sorted_token_ids", sorted_token_ids)
+        #p("topk_weights", topk_weights)
+
         #print(f"B:\n{B}")
         #print(f"B_scale:\n{B_scale}")
 
@@ -804,6 +821,9 @@ def invoke_fused_moe_kernel(A: torch.Tensor,
             use_int8_w8a16=use_int8_w8a16,
             **config,
         )
+
+        p("fused_out", C)
+        print(f"END {'SECOND' if mul_routed_weight else 'FIRST'} FUSED_GEMM")
 
 
 # Adapted from: https://github.com/sgl-project/sglang/pull/2628
@@ -956,7 +976,6 @@ def fused_topk(
         topk_weights,
         topk_ids,
         token_expert_indicies,
-        # XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
         gating_output.float(),  # TODO(woosuk): Optimize this.
     )
     del token_expert_indicies  # Not used. Will be used in the future.
@@ -1271,6 +1290,9 @@ def fused_experts_impl(hidden_states: torch.Tensor,
     else:
         out_hidden_states = torch.empty_like(hidden_states)
 
+    print(f"NUM CHUNKS = {(num_tokens // CHUNK_SIZE) + 1}")
+    print(f"FUSED A {hidden_states.shape}, {hidden_states}")
+
     for chunk in range((num_tokens // CHUNK_SIZE) + 1):
         begin_chunk_idx, end_chunk_idx = (chunk * CHUNK_SIZE,
                                           min((chunk + 1) * CHUNK_SIZE,
@@ -1299,6 +1321,8 @@ def fused_experts_impl(hidden_states: torch.Tensor,
             moe_align_block_size(curr_topk_ids, config['BLOCK_SIZE_M'],
                                  global_num_experts, expert_map))
 
+        print(f"CUR_TOPK_IDS {curr_topk_ids.shape}")
+
         invoke_fused_moe_kernel(curr_hidden_states,
                                 w1,
                                 intermediate_cache1,
@@ -1319,7 +1343,7 @@ def fused_experts_impl(hidden_states: torch.Tensor,
                                 use_int4_w4a16=use_int4_w4a16,
                                 block_shape=block_shape)
 
-        #print(f"FUSED_MOE {intermediate_cache1.shape} {intermediate_cache1}")
+        print(f"FUSED_MOE {intermediate_cache1.shape} {intermediate_cache1}")
 
         if activation == "silu":
             torch.ops._C.silu_and_mul(intermediate_cache2,
@@ -1428,6 +1452,8 @@ def fused_moe(
     Returns:
     - torch.Tensor: The output tensor after applying the MoE layer.
     """
+
+    print(f"FUSED SCORES {hidden_states.shape} {gating_output.shape}")
 
     if use_grouped_topk:
         assert num_expert_group is not None and topk_group is not None
