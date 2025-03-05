@@ -165,8 +165,7 @@ class CudaPlatformBase(Platform):
             # TODO(lucas): refactor to  be more concise
             #  we should probably consider factoring out V1 here
             if selected_backend == _Backend.FLASHMLA:
-                from vllm.attention.backends.flashmla import (
-                    is_flashmla_supported)
+                from vllm.attention.ops.flashmla import is_flashmla_supported
                 if not is_flashmla_supported()[0]:
                     logger.warning(
                         "FlashMLA backend is not supported due to %s",
@@ -192,8 +191,15 @@ class CudaPlatformBase(Platform):
                 return ("vllm.v1.attention.backends.mla."
                         "triton_mla.TritonMLABackend")
             else:
-                logger.info("Using Triton MLA backend.")
-                return "vllm.attention.backends.triton_mla.TritonMLABackend"
+                from vllm.attention.backends.utils import (
+                    is_flash_attn_mla_supported)
+                if is_flash_attn_mla_supported():
+                    logger.info("Using FlashAttnMLA backend.")
+                    return ("vllm.attention.backends.mla."
+                            "flashattn_mla.FlashAttnMLABackend")
+                else:
+                    logger.info("Using Triton MLA backend.")
+                    return "vllm.attention.backends.triton_mla.TritonMLABackend"
         if use_v1:
             logger.info_once("Using Flash Attention backend on V1 engine.")
             return ("vllm.v1.attention.backends.flash_attn."

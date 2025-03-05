@@ -612,3 +612,15 @@ def get_flash_attn_version():
         return fa_version
     except (ImportError, AssertionError):
         return None
+
+
+def is_flash_attn_mla_supported():
+    if current_platform.is_cuda():
+        try:
+            from vllm.vllm_flash_attn.flash_attn_interface import (
+                is_fa_version_supported)
+            return is_fa_version_supported(3) \
+                and current_platform.get_device_capability()[0] == 9
+        except (ImportError, AssertionError):
+            pass
+    return False
