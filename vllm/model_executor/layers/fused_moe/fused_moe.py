@@ -29,11 +29,11 @@ if True or envs.VLLM_USE_DEEP_GEMM:
 
 
 def p(s, t):
-    #print(f"{s}: {t.shape}\n{t}")
+    print(f"{s}: {t.shape}\n{t}")
     pass
 
 def pp(x):
-    #print(x)
+    print(x)
     pass
 
 
@@ -747,13 +747,15 @@ def invoke_fused_moe_kernel(A: torch.Tensor,
 
         if use_dg:
             inv_perm = torch.argsort(sorted_token_ids)
-            # if not mul_routed_weight?
             X = A.shape
-            A_scale = dg.get_col_major_tma_aligned_tensor(A_scale)
+            Y = A_scale.shape
+            if not mul_routed_weight:
+                A_scale = dg.get_col_major_tma_aligned_tensor(A_scale)
             A = A.view(dtype=torch.uint8)[sorted_token_ids, ...].view(dtype=A.dtype)
             A_scale = A_scale[sorted_token_ids]
             assert X == A.shape
             assert A_scale.shape[-1] == A.shape[-1] // 128
+            assert Y == A_scale.shape
 
     elif use_int8_w8a16 or use_int4_w4a16:
         assert B_scale is not None
@@ -770,7 +772,6 @@ def invoke_fused_moe_kernel(A: torch.Tensor,
         # and we can skip some invalid blocks.
         EM = min(sorted_token_ids.shape[0],
                  A.shape[0] * top_k * config['BLOCK_SIZE_M'])
-
     grid = lambda META: (triton.cdiv(EM, META['BLOCK_SIZE_M']) * triton.cdiv(
         B.shape[1], META['BLOCK_SIZE_N']), )
 
@@ -848,16 +849,17 @@ def invoke_fused_moe_kernel(A: torch.Tensor,
         C_s = C.shape
         M = C.shape[0] * C.shape[1]
         C = C.view(M, -1)
-        print(f"C_S {C_s}")
+        print(f"{C.shape} -> {C_s}")
         dg.m_grouped_gemm_fp8_fp8_bf16_nt_contiguous((A, A_scale),
                                                      (B, B_scale),
                                                      C,
                                                      expert_ids)
 
         if mul_routed_weight:
-            assert inv_perm
+            _, K = A.shape
+            assert inv_perm is not None
             C = C[inv_perm, ...]
-            C = C.view(M, -1, B.shape[1]) #* topk_weights.view(M, -1, 1)
+            C = C.view(M, -1, K) * topk_weights.view(M, -1, 1)
             print(f"C_s {C_s} == C.shape {C.shape}")
     else:
         fused_moe_kernel[grid](
@@ -1457,7 +1459,7 @@ def fused_experts_impl(
     else:
         out_hidden_states = torch.empty_like(hidden_states)
 
-    use_dg = False and valid_deep_gemm(hidden_states, w1, w2, config, use_fp8_w8a8)
+    use_dg = valid_deep_gemm(hidden_states, w1, w2, config, use_fp8_w8a8)
 
     if use_dg:
         print("USE_DG!!!!!!!!!!!!!")
@@ -1501,8 +1503,8 @@ def fused_experts_impl(
         # TODO: fix, this won't work chunked
         if use_dg:
             print(f"SOR {sorted_token_ids}")
-            expert_ids = torch.arange(0, top_k_num, dtype=torch.int)
-            expert_ids = expert_ids.unsqueeze(-1).expand(top_k_num, tokens_in_chunk).contiguous().view(-1)
+            #expert_ids = torch.arange(0, top_k_num, dtype=torch.int)
+            #expert_ids = expert_ids.unsqueeze(-1).expand(top_k_num, tokens_in_chunk).contiguous().view(-1)
 
         invoke_fused_moe_kernel(curr_hidden_states,
                                 w1,
