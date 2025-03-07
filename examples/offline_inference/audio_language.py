@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 This example shows how to use vLLM for running offline inference 
 with the correct prompt format on audio language models.
@@ -23,25 +24,30 @@ question_per_audio_count = {
 # Unless specified, these settings have been tested to work on a single L4.
 
 
-# Ultravox 0.3
-def run_ultravox(question: str, audio_count: int):
-    model_name = "fixie-ai/ultravox-v0_3"
+# MiniCPM-O
+def run_minicpmo(question: str, audio_count: int):
+    model_name = "openbmb/MiniCPM-o-2_6"
+    tokenizer = AutoTokenizer.from_pretrained(model_name,
+                                              trust_remote_code=True)
+    llm = LLM(model=model_name,
+              trust_remote_code=True,
+              max_model_len=4096,
+              max_num_seqs=5,
+              limit_mm_per_prompt={"audio": audio_count})
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    stop_tokens = ['<|im_end|>', '<|endoftext|>']
+    stop_token_ids = [tokenizer.convert_tokens_to_ids(i) for i in stop_tokens]
+
+    audio_placeholder = "(<audio>./</audio>)" * audio_count
+    audio_chat_template = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n<|spk_bos|><|spk|><|spk_eos|><|tts_bos|>' }}{% endif %}"  # noqa: E501
     messages = [{
         'role': 'user',
-        'content': "<|audio|>\n" * audio_count + question
+        'content': f'{audio_placeholder}\n{question}'
     }]
     prompt = tokenizer.apply_chat_template(messages,
                                            tokenize=False,
-                                           add_generation_prompt=True)
-
-    llm = LLM(model=model_name,
-              max_model_len=4096,
-              max_num_seqs=5,
-              trust_remote_code=True,
-              limit_mm_per_prompt={"audio": audio_count})
-    stop_token_ids = None
+                                           add_generation_prompt=True,
+                                           chat_template=audio_chat_template)
     return llm, prompt, stop_token_ids
 
 
@@ -67,7 +73,50 @@ def run_qwen2_audio(question: str, audio_count: int):
     return llm, prompt, stop_token_ids
 
 
-model_example_map = {"ultravox": run_ultravox, "qwen2_audio": run_qwen2_audio}
+# Ultravox 0.5-1B
+def run_ultravox(question: str, audio_count: int):
+    model_name = "fixie-ai/ultravox-v0_5-llama-3_2-1b"
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    messages = [{
+        'role': 'user',
+        'content': "<|audio|>\n" * audio_count + question
+    }]
+    prompt = tokenizer.apply_chat_template(messages,
+                                           tokenize=False,
+                                           add_generation_prompt=True)
+
+    llm = LLM(model=model_name,
+              max_model_len=4096,
+              max_num_seqs=5,
+              trust_remote_code=True,
+              limit_mm_per_prompt={"audio": audio_count})
+    stop_token_ids = None
+    return llm, prompt, stop_token_ids
+
+
+# Whisper
+def run_whisper(question: str, audio_count: int):
+    assert audio_count == 1, (
+        "Whisper only support single audio input per prompt")
+    model_name = "openai/whisper-large-v3-turbo"
+
+    prompt = "<|startoftranscript|>"
+
+    llm = LLM(model=model_name,
+              max_model_len=448,
+              max_num_seqs=5,
+              limit_mm_per_prompt={"audio": audio_count})
+    stop_token_ids = None
+    return llm, prompt, stop_token_ids
+
+
+model_example_map = {
+    "minicpmo": run_minicpmo,
+    "qwen2_audio": run_qwen2_audio,
+    "ultravox": run_ultravox,
+    "whisper": run_whisper,
+}
 
 
 def main(args):

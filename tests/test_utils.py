@@ -1,7 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import asyncio
 import os
 import socket
-from typing import AsyncIterator, Tuple
+from collections.abc import AsyncIterator
 from unittest.mock import patch
 
 import pytest
@@ -31,7 +33,7 @@ async def test_merge_async_iterators():
     iterators = [mock_async_iterator(i) for i in range(3)]
     merged_iterator = merge_async_iterators(*iterators)
 
-    async def stream_output(generator: AsyncIterator[Tuple[int, str]]):
+    async def stream_output(generator: AsyncIterator[tuple[int, str]]):
         async for idx, output in generator:
             print(f"idx: {idx}, output: {output}")
 
