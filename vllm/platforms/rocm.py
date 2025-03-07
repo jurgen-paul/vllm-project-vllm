@@ -248,3 +248,7 @@ class RocmPlatform(Platform):
             return torch.float8_e4m3fnuz
         else:
             return torch.float8_e4m3fn
+
+    @classmethod
+    def get_stream_cls(cls) -> str:
+        return "torch.cuda.Stream"
