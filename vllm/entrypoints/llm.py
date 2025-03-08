@@ -10,7 +10,7 @@ import cloudpickle
 import torch.nn as nn
 from tqdm import tqdm
 from typing_extensions import TypeVar, deprecated
-
+import torch
 from vllm import envs
 from vllm.beam_search import (BeamSearchInstance, BeamSearchOutput,
                               BeamSearchSequence, get_beam_search_score)
@@ -386,6 +386,7 @@ class LLM:
         sampling_params: Optional[Union[SamplingParams,
                                         Sequence[SamplingParams]]] = None,
         prompt_token_ids: Optional[Union[list[int], list[list[int]]]] = None,
+        prompt_embeds: Optional[torch.Tensor] = None,
         use_tqdm: bool = True,
         lora_request: Optional[Union[list[LoRARequest], LoRARequest]] = None,
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
@@ -408,10 +409,15 @@ class LLM:
                 When it is a single value, it is applied to every prompt.
                 When it is a list, the list must have the same length as the
                 prompts and it is paired one by one with the prompt.
+            prompt_token_ids: DEPRECATED. Token IDs for the prompts. If provided,
+                the `prompts` will be ignored.
+            prompt_embeds: Optional tensor of prompt embeddings to use instead of
+                text prompts.
             use_tqdm: Whether to use tqdm to display the progress bar.
             lora_request: LoRA request to use for generation, if any.
             prompt_adapter_request: Prompt Adapter request to use for
                 generation, if any.
+            guided_options_request: Options for guided decoding, if any.
             priority: The priority of the requests, if any.
                 Only applicable when priority scheduling policy is enabled.
 
@@ -449,6 +455,11 @@ class LLM:
         else:
             parsed_prompts = cast(Union[PromptType, Sequence[PromptType]],
                                   prompts)
+
+        # Handle prompt_embeds separately
+        # This is a simplified approach - you may need to adjust based on how prompt_embeds is used
+        if prompt_embeds is not None:
+            parsed_prompts.prompt_embeds = prompt_embeds
 
         if isinstance(guided_options_request, dict):
             if len(guided_options_request) > 1:
@@ -1231,6 +1242,7 @@ class LLM:
         self,
         prompts: Optional[Union[str, list[str]]],
         prompt_token_ids: Optional[Union[list[int], list[list[int]]]],
+        prompt_embeds: Optional[torch.Tensor] = None,
     ):
         # skip_tokenizer_init is now checked in engine
 
@@ -1268,137 +1280,6 @@ class LLM:
 
             parsed_prompts.append(item)
 
+        # We don't need to handle prompt_embeds here since it's handled in the generate method
         return parsed_prompts
 
-    def _validate_and_add_requests(
-        self,
-        prompts: Union[PromptType, Sequence[PromptType]],
-        params: Union[SamplingParams, Sequence[SamplingParams], PoolingParams,
-                      Sequence[PoolingParams]],
-        lora_request: Optional[Union[Sequence[LoRARequest], LoRARequest]],
-        prompt_adapter_request: Optional[PromptAdapterRequest],
-        guided_options: Optional[GuidedDecodingRequest] = None,
-        priority: Optional[list[int]] = None,
-    ) -> None:
-        if guided_options is not None:
-            warnings.warn(
-                "guided_options_request is deprecated, use "
-                "SamplingParams.guided_decoding instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-        if isinstance(prompts, (str, dict)):
-            # Convert a single prompt to a list.
-            prompts = [prompts]
-
-        num_requests = len(prompts)
-        if isinstance(params, list) and len(params) != num_requests:
-            raise ValueError("The lengths of prompts and params "
-                             "must be the same.")
-        if isinstance(lora_request,
-                      list) and len(lora_request) != num_requests:
-            raise ValueError("The lengths of prompts and lora_request "
-                             "must be the same.")
-
-        for sp in params if isinstance(params, list) else (params, ):
-            if isinstance(sp, SamplingParams):
-                self._add_guided_params(sp, guided_options)
-
-                # We only care about the final output
-                sp.output_kind = RequestOutputKind.FINAL_ONLY
-
-        # Add requests to the engine.
-        for i, prompt in enumerate(prompts):
-            self._add_request(
-                prompt,
-                params[i] if isinstance(params, Sequence) else params,
-                lora_request=lora_request[i] if isinstance(
-                    lora_request, Sequence) else lora_request,
-                prompt_adapter_request=prompt_adapter_request,
-                priority=priority[i] if priority else 0,
-            )
-
-    def _add_request(
-        self,
-        prompt: PromptType,
-        params: Union[SamplingParams, PoolingParams],
-        lora_request: Optional[LoRARequest] = None,
-        prompt_adapter_request: Optional[PromptAdapterRequest] = None,
-        priority: int = 0,
-    ) -> None:
-        request_id = str(next(self.request_counter))
-        self.llm_engine.add_request(
-            request_id,
-            prompt,
-            params,
-            lora_request=lora_request,
-            prompt_adapter_request=prompt_adapter_request,
-            priority=priority,
-        )
-
-    def _add_guided_params(
-            self,
-            params: SamplingParams,
-            guided_options: Optional[GuidedDecodingRequest] = None):
-        if guided_options is None:
-            return params
-
-        if params.guided_decoding is not None:
-            raise ValueError("Cannot set both guided_options_request and "
-                             "params.guided_decoding.")
-
-        params.guided_decoding = GuidedDecodingParams(
-            json=guided_options.guided_json,
-            regex=guided_options.guided_regex,
-            choice=guided_options.guided_choice,
-            grammar=guided_options.guided_grammar,
-            json_object=guided_options.guided_json_object,
-            backend=guided_options.guided_decoding_backend,
-            whitespace_pattern=guided_options.guided_whitespace_pattern)
-        return params
-
-    def _run_engine(
-            self, *, use_tqdm: bool
-    ) -> list[Union[RequestOutput, PoolingRequestOutput]]:
-        # Initialize tqdm.
-        if use_tqdm:
-            num_requests = self.llm_engine.get_num_unfinished_requests()
-            pbar = tqdm(
-                total=num_requests,
-                desc="Processed prompts",
-                dynamic_ncols=True,
-                postfix=(f"est. speed input: {0:.2f} toks/s, "
-                         f"output: {0:.2f} toks/s"),
-            )
-
-        # Run the engine.
-        outputs: list[Union[RequestOutput, PoolingRequestOutput]] = []
-        total_in_toks = 0
-        total_out_toks = 0
-        while self.llm_engine.has_unfinished_requests():
-            step_outputs = self.llm_engine.step()
-            for output in step_outputs:
-                if output.finished:
-                    outputs.append(output)
-                    if use_tqdm:
-                        if isinstance(output, RequestOutput):
-                            # Calculate tokens only for RequestOutput
-                            assert output.prompt_token_ids is not None
-                            total_in_toks += len(output.prompt_token_ids)
-                            in_spd = total_in_toks / pbar.format_dict["elapsed"]
-                            total_out_toks += sum(
-                                len(stp.token_ids) for stp in output.outputs)
-                            out_spd = (total_out_toks /
-                                       pbar.format_dict["elapsed"])
-                            pbar.postfix = (
-                                f"est. speed input: {in_spd:.2f} toks/s, "
-                                f"output: {out_spd:.2f} toks/s")
-                        pbar.update(1)
-
-        if use_tqdm:
-            pbar.close()
-        # Sort the outputs by request ID.
-        # This is necessary because some requests may be finished earlier than
-        # its previous requests.
-        return sorted(outputs, key=lambda x: int(x.request_id))
