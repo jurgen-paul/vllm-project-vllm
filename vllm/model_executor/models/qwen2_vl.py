@@ -24,10 +24,11 @@
 # limitations under the License.
 """Inference-only Qwen2-VL model compatible with HuggingFace weights."""
 from collections.abc import Iterable, Mapping, Sequence
-from functools import cached_property, partial
+from functools import cached_property, lru_cache, partial
 from typing import (Any, Callable, Literal, Optional, Set, Tuple, TypedDict,
                     Union)
 
+from numba import guvectorize
 import numpy as np
 import torch
 import torch.nn as nn
@@ -592,7 +593,7 @@ class Qwen2VisionTransformer(nn.Module):
     def device(self) -> torch.device:
         return self.patch_embed.proj.weight.device
     
-    def rot_pos(self, grid_thw: torch.Tensor) -> torch.Tensor:
+    def rot_pos_numpy(self, grid_thw: torch.Tensor) -> torch.Tensor:
         pos_ids = []
         for t, h, w in grid_thw.tolist():
             hpos_ids = np.arange(h).reshape(-1, 1).repeat(w, axis=1)
@@ -614,7 +615,44 @@ class Qwen2VisionTransformer(nn.Module):
             )
         pos_ids = np.concatenate(pos_ids, axis=0)
         return torch.from_numpy(pos_ids)
+    
+    @lru_cache(max_size=1)
+    def lazy_compile_vec_rot_pos(self, spatial_merge_size: int):
+        if spatial_merge_size == 2:
+            @guvectorize(['void(int32[:,:],int32)'], "(numel, h_w),()", target='cpu', writable_args=(0, ))
+            def vec_rot_pos(arr, w):
+                # optimized for spatial_merge_size == 2
+                w_mul_2 = w * 2
+                for i in range(arr.shape[0]):
+                    # calc hpos_id: (i // (w * 2)) * 2 + (i // 2) % 2
+                    # use bitwise operation for better performance
+                    arr[i, 0] = ((i // w_mul_2) << 1) | ((i >> 1) & 1)
 
+                    # calc wpos_id: (i // (w * 2)) * 2 + (i // 2) % 2
+                    # use bitwise operation for better performance
+                    arr[i, 1] = ((i % w_mul_2) >> 2) << 1 | (i & 1)
+        else:
+            @guvectorize(['void(int32[:,:],int32)'], "(numel, h_w),()", target='cpu', writable_args=(0, ))
+            def vec_rot_pos(arr, w):
+                w_mul_2 = w * 2
+                for i in range(arr.shape[0]):
+                    # calc hpos_id
+                    arr[i, 0] = (i // w_mul_2) * 2 + (i // 2) % 2
+
+                    # calc wpos_id
+                    arr[i, 1] = (i // w_mul_2) * 2 + (i // 2) % 2
+        return vec_rot_pos
+    
+    def rot_pos_numba(self, grid_thw: torch.Tensor) -> torch.Tensor:
+        vec_rot_pos = self.lazy_compile_vec_rot_pos(self.spatial_merge_size)
+        seqlens = grid_thw.prod(dim=1)
+        pos_ids = np.empty((seqlens.sum().item(), 2), dtype=np.int32)
+        cu_seqlens = 0
+        for i, seqlen in enumerate(seqlens):
+            vec_rot_pos(pos_ids[cu_seqlens:cu_seqlens+seqlen], grid_thw[i, 2])
+            cu_seqlens += seqlen
+        return torch.from_numpy(pos_ids)
+    
     def forward(
         self,
         x: torch.Tensor,
@@ -625,7 +663,7 @@ class Qwen2VisionTransformer(nn.Module):
         x = self.patch_embed(x)
 
         # compute position embedding
-        pos_ids = self.rot_pos(grid_thw)
+        pos_ids = self.rot_pos_numba(grid_thw)
         max_grid_size = grid_thw[:, 1:].max().item()
         rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
         rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
