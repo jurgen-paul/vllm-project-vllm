@@ -28,6 +28,7 @@ from functools import cached_property, partial
 from typing import (Any, Callable, Literal, Optional, Set, Tuple, TypedDict,
                     Union)
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -590,31 +591,29 @@ class Qwen2VisionTransformer(nn.Module):
     @property
     def device(self) -> torch.device:
         return self.patch_embed.proj.weight.device
-
-    def rot_pos_emb(self, grid_thw: torch.Tensor) -> torch.Tensor:
+    
+    def rot_pos(self, grid_thw: torch.Tensor) -> torch.Tensor:
         pos_ids = []
-        for t, h, w in grid_thw:
-            hpos_ids = torch.arange(h).unsqueeze(1).expand(-1, w)
-            wpos_ids = torch.arange(w).unsqueeze(0).expand(h, -1)
+        for t, h, w in grid_thw.tolist():
+            hpos_ids = np.arange(h).reshape(-1, 1).repeat(w, axis=1)
+            wpos_ids = np.arange(w).reshape(1, -1).repeat(h, axis=0)
             hpos_ids = hpos_ids.reshape(
                 h // self.spatial_merge_size,
                 self.spatial_merge_size,
                 w // self.spatial_merge_size,
-                self.spatial_merge_size,
-            ).permute(0, 2, 1, 3).flatten()
+                self.spatial_merge_size
+            ).transpose(0, 2, 1, 3).flatten()
             wpos_ids = wpos_ids.reshape(
                 h // self.spatial_merge_size,
                 self.spatial_merge_size,
                 w // self.spatial_merge_size,
-                self.spatial_merge_size,
-            ).permute(0, 2, 1, 3).flatten()
+                self.spatial_merge_size
+            ).transpose(0, 2, 1, 3).flatten()
             pos_ids.append(
-                torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1))
-        pos_ids = torch.cat(pos_ids, dim=0)
-        max_grid_size = grid_thw[:, 1:].max()
-        rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
-        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
-        return rotary_pos_emb
+                np.tile(np.stack([hpos_ids, wpos_ids], axis=-1), (t, 1))
+            )
+        pos_ids = np.concatenate(pos_ids, axis=0)
+        return torch.from_numpy(pos_ids)
 
     def forward(
         self,
@@ -626,7 +625,10 @@ class Qwen2VisionTransformer(nn.Module):
         x = self.patch_embed(x)
 
         # compute position embedding
-        rotary_pos_emb = self.rot_pos_emb(grid_thw)
+        pos_ids = self.rot_pos(grid_thw)
+        max_grid_size = grid_thw[:, 1:].max().item()
+        rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
+        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
 
         # compute cu_seqlens
         cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
