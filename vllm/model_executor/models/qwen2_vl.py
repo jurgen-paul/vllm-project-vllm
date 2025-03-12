@@ -645,13 +645,17 @@ class Qwen2VisionTransformer(nn.Module):
     
     def rot_pos_numba(self, grid_thw: torch.Tensor) -> torch.Tensor:
         vec_rot_pos = self.lazy_compile_vec_rot_pos(self.spatial_merge_size)
-        seqlens = grid_thw.prod(dim=1)
-        pos_ids = np.empty((seqlens.sum().item(), 2), dtype=np.int32)
-        cu_seqlens = 0
-        for i, seqlen in enumerate(seqlens):
-            vec_rot_pos(pos_ids[cu_seqlens:cu_seqlens+seqlen], grid_thw[i, 2])
-            cu_seqlens += seqlen
-        return torch.from_numpy(pos_ids)
+
+        pos_ids_list = []
+        for t, h, w in grid_thw.tolist():
+            arr = np.empty((h * w, 2), dtype=np.int32)
+            vec_rot_pos(arr, w)
+            pos_ids_list.append(np.tile(arr, (t, 1)))
+        
+        if len(pos_ids_list) == 1:
+            return torch.from_numpy(pos_ids_list[0])
+        
+        return torch.from_numpy(np.concatenate(pos_ids_list, axis=0))
     
     def forward(
         self,
@@ -669,27 +673,27 @@ class Qwen2VisionTransformer(nn.Module):
         rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
 
         # compute cu_seqlens
-        cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
+        seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
                                              grid_thw[:, 0]).cumsum(
                                                  dim=0, dtype=torch.int32)
-        cu_seqlens = F.pad(cu_seqlens, (1, 0), "constant", 0)
+        cu_seqlens = F.pad(seqlens, (1, 0), "constant", 0)
 
         # transformers
         x = x.unsqueeze(1)
 
         max_seqlen = None
-        seqlens = None
+        seqlens_list = None
         if self.attn_backend == _Backend.FLASH_ATTN:
-            max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+            max_seqlen = seqlens.max().item()
         elif self.attn_backend == _Backend.XFORMERS:
-            seqlens = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
+            seqlens_list = seqlens.tolist()
         for blk in self.blocks:
             x = blk(
                 x,
                 cu_seqlens=cu_seqlens,
                 rotary_pos_emb=rotary_pos_emb,
                 max_seqlen=max_seqlen,
-                seqlens=seqlens,
+                seqlens=seqlens_list,
             )
 
         # adapter
