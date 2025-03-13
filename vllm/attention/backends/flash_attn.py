@@ -8,14 +8,18 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
 import torch
 
 from vllm import _custom_ops as ops
+# yapf conflicts with isort for this block
+# yapf: disable
 from vllm.attention.backends.abstract import (AttentionBackend, AttentionImpl,
                                               AttentionLayer,
                                               AttentionMetadata,
                                               AttentionMetadataBuilder,
-                                              AttentionType)
+                                              AttentionType,
+                                              is_quantized_kv_cache)
+# yapf: enable
 from vllm.attention.backends.utils import (
-    PAD_SLOT_ID, VLLM_FLASH_ATTN_VERSION, CommonAttentionState,
-    compute_slot_mapping, compute_slot_mapping_start_idx,
+    PAD_SLOT_ID, CommonAttentionState, compute_slot_mapping,
+    compute_slot_mapping_start_idx, get_flash_attn_version,
     get_num_prefill_decode_query_kv_tokens, get_seq_len_block_table_args,
     is_all_cross_attn_metadata_set, is_all_encoder_attn_metadata_set,
     is_block_tables_empty)
@@ -626,6 +630,9 @@ class FlashAttentionImpl(AttentionImpl):
         self.sliding_window = ((sliding_window - 1,
                                 0) if sliding_window is not None else (-1, -1))
         self.kv_cache_dtype = kv_cache_dtype
+        if is_quantized_kv_cache(self.kv_cache_dtype):
+            raise NotImplementedError(
+                "FlashAttention with FP8 KV cache not yet supported")
         if logits_soft_cap is None:
             # In flash-attn, setting logits_soft_cap as 0 means no soft cap.
             logits_soft_cap = 0
@@ -640,6 +647,7 @@ class FlashAttentionImpl(AttentionImpl):
                 f"Head size {head_size} is not supported by FlashAttention. "
                 f"Supported head sizes are: {support_head_sizes}.")
         self.attn_type = attn_type
+        self.vllm_flash_attn_version = get_flash_attn_version()
 
     def forward(
         self,
@@ -759,7 +767,7 @@ class FlashAttentionImpl(AttentionImpl):
                     alibi_slopes=alibi_slopes,
                     softcap=logits_soft_cap,
                     out=prefill_output,
-                    fa_version=VLLM_FLASH_ATTN_VERSION,
+                    fa_version=self.vllm_flash_attn_version,
                 )
             else:
                 # prefix-enabled attention
@@ -782,7 +790,7 @@ class FlashAttentionImpl(AttentionImpl):
                     block_table=prefill_meta.block_tables,
                     softcap=logits_soft_cap,
                     out=prefill_output,
-                    fa_version=VLLM_FLASH_ATTN_VERSION,
+                    fa_version=self.vllm_flash_attn_version,
                 )
 
         if decode_meta := attn_metadata.decode_metadata:
@@ -811,7 +819,7 @@ class FlashAttentionImpl(AttentionImpl):
                     softcap=logits_soft_cap,
                     block_table=decode_meta.block_tables,
                     out=decode_output,
-                    fa_version=VLLM_FLASH_ATTN_VERSION,
+                    fa_version=self.vllm_flash_attn_version,
                 )
             else:
                 # Use flash_attn_with_kvcache for normal decoding.
@@ -832,7 +840,7 @@ class FlashAttentionImpl(AttentionImpl):
                     alibi_slopes=alibi_slopes,
                     softcap=logits_soft_cap,
                     out=decode_output.unsqueeze(1),
-                    fa_version=VLLM_FLASH_ATTN_VERSION,
+                    fa_version=self.vllm_flash_attn_version,
                 )
         return output
 

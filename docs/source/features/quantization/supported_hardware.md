@@ -20,64 +20,64 @@ The table below shows the compatibility of various quantization implementations 
   * AWS Inferentia
   * Google TPU
 - * AWQ
-  * ✗
+  * ❌
   * ✅︎
   * ✅︎
   * ✅︎
   * ✅︎
-  * ✗
+  * ❌
   * ✅︎
   * ✅︎
-  * ✗
-  * ✗
+  * ❌
+  * ❌
 - * GPTQ
   * ✅︎
   * ✅︎
   * ✅︎
   * ✅︎
   * ✅︎
-  * ✗
+  * ❌
   * ✅︎
   * ✅︎
-  * ✗
-  * ✗
+  * ❌
+  * ❌
 - * Marlin (GPTQ/AWQ/FP8)
-  * ✗
-  * ✗
+  * ❌
+  * ❌
   * ✅︎
   * ✅︎
   * ✅︎
-  * ✗
-  * ✗
-  * ✗
-  * ✗
-  * ✗
+  * ❌
+  * ❌
+  * ❌
+  * ❌
+  * ❌
+- * INT8 (W8A8)
+  * ❌
+  * ✅︎
+  * ✅︎
+  * ✅︎
+  * ✅︎
+  * ❌
+  * ❌
+  * ✅︎
+  * ❌
+  * ❌
+- * FP8 (W8A8)
+  * ❌
+  * ❌
+  * ❌
+  * ✅︎
+  * ✅︎
+  * ✅︎
+  * ❌
+  * ❌
+  * ❌
+  * ❌
 - * BitBLAS (GPTQ)
   * ✅︎
   * ✅︎
   * ✅︎
-  * ✅︎
-  * ✅︎
-  * ✅︎
-  * ✗
-  * ✗
-  * ✗
-  * ✗
-- * INT8 (W8A8)
-  * ✗
-  * ✅︎
-  * ✅︎
-  * ✅︎
-  * ✅︎
-  * ✗
-  * ✗
-  * ✅︎
-  * ✗
-  * ✗
-- * FP8 (W8A8)
-  * ✗
-  * ✗
-  * ✗
   * ✅︎
   * ✅︎
   * ✅︎
@@ -91,33 +91,33 @@ The table below shows the compatibility of various quantization implementations 
   * ✅︎
   * ✅︎
   * ✅︎
-  * ✗
-  * ✗
-  * ✗
-  * ✗
-  * ✗
+  * ❌
+  * ❌
+  * ❌
+  * ❌
+  * ❌
 - * bitsandbytes
   * ✅︎
   * ✅︎
   * ✅︎
   * ✅︎
   * ✅︎
-  * ✗
-  * ✗
-  * ✗
-  * ✗
-  * ✗
+  * ❌
+  * ❌
+  * ❌
+  * ❌
+  * ❌
 - * DeepSpeedFP
   * ✅︎
   * ✅︎
   * ✅︎
   * ✅︎
   * ✅︎
-  * ✗
-  * ✗
-  * ✗
-  * ✗
-  * ✗
+  * ❌
+  * ❌
+  * ❌
+  * ❌
+  * ❌
 - * GGUF
   * ✅︎
   * ✅︎
@@ -125,16 +125,16 @@ The table below shows the compatibility of various quantization implementations 
   * ✅︎
   * ✅︎
   * ✅︎
-  * ✗
-  * ✗
-  * ✗
-  * ✗
+  * ❌
+  * ❌
+  * ❌
+  * ❌
 
 :::
 
 - Volta refers to SM 7.0, Turing to SM 7.5, Ampere to SM 8.0/8.6, Ada to SM 8.9, and Hopper to SM 9.0.
-- "✅︎" indicates that the quantization method is supported on the specified hardware.
-- "✗" indicates that the quantization method is not supported on the specified hardware.
+- ✅︎ indicates that the quantization method is supported on the specified hardware.
+- ❌ indicates that the quantization method is not supported on the specified hardware.
 
 :::{note}
 This compatibility chart is subject to change as vLLM continues to evolve and expand its support for different hardware platforms and quantization methods.
