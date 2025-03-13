@@ -593,65 +593,66 @@ class Qwen2VisionTransformer(nn.Module):
     def device(self) -> torch.device:
         return self.patch_embed.proj.weight.device
     
-    def rot_pos_numpy(self, grid_thw: torch.Tensor) -> torch.Tensor:
+    def rot_pos_torch(self, grid_thw: torch.Tensor) -> torch.Tensor:
         pos_ids = []
-        for t, h, w in grid_thw.tolist():
-            hpos_ids = np.arange(h).reshape(-1, 1).repeat(w, axis=1)
-            wpos_ids = np.arange(w).reshape(1, -1).repeat(h, axis=0)
+        for t, h, w in grid_thw:
+            hpos_ids = torch.arange(h).unsqueeze(1).expand(-1, w)
+            wpos_ids = torch.arange(w).unsqueeze(0).expand(h, -1)
             hpos_ids = hpos_ids.reshape(
                 h // self.spatial_merge_size,
                 self.spatial_merge_size,
                 w // self.spatial_merge_size,
-                self.spatial_merge_size
-            ).transpose(0, 2, 1, 3).flatten()
+                self.spatial_merge_size,
+            ).permute(0, 2, 1, 3).flatten()
             wpos_ids = wpos_ids.reshape(
                 h // self.spatial_merge_size,
                 self.spatial_merge_size,
                 w // self.spatial_merge_size,
-                self.spatial_merge_size
-            ).transpose(0, 2, 1, 3).flatten()
+                self.spatial_merge_size,
+            ).permute(0, 2, 1, 3).flatten()
             pos_ids.append(
-                np.tile(np.stack([hpos_ids, wpos_ids], axis=-1), (t, 1))
-            )
-        pos_ids = np.concatenate(pos_ids, axis=0)
-        return torch.from_numpy(pos_ids)
+                torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1))
+        return torch.cat(pos_ids, dim=0)
     
     @lru_cache(max_size=1)
     def lazy_compile_vec_rot_pos(self, spatial_merge_size: int):
         if spatial_merge_size == 2:
-            @guvectorize(['void(int32[:,:],int32)'], "(numel, h_w),()", target='cpu', writable_args=(0, ))
-            def vec_rot_pos(arr, w):
-                # optimized for spatial_merge_size == 2
+            @guvectorize(["void(int64[:,:],int64)"], "(numel, hpos_and_wpos),()", target="cpu", writable_args=(0, ))
+            def vec_rot_pos_merge_2(arr, w):
+                # optimized version of vec_rot_pos_common (assume spatial_merge_size == 2)
                 w_mul_2 = w * 2
                 for i in range(arr.shape[0]):
                     # calc hpos_id: (i // (w * 2)) * 2 + (i // 2) % 2
                     # use bitwise operation for better performance
                     arr[i, 0] = ((i // w_mul_2) << 1) | ((i >> 1) & 1)
 
-                    # calc wpos_id: (i // (w * 2)) * 2 + (i // 2) % 2
+                    # calc wpos_id: (i % (w * 2)) // 4 * 2 + i % 2
                     # use bitwise operation for better performance
                     arr[i, 1] = ((i % w_mul_2) >> 2) << 1 | (i & 1)
+            return vec_rot_pos_merge_2
         else:
-            @guvectorize(['void(int32[:,:],int32)'], "(numel, h_w),()", target='cpu', writable_args=(0, ))
-            def vec_rot_pos(arr, w):
-                w_mul_2 = w * 2
+            @guvectorize(["void(int64[:,:],int64)"], "(numel, hpos_and_wpos),()", target="cpu", writable_args=(0, ))
+            def vec_rot_pos_common(arr, w):
+                patched_row_size = w * spatial_merge_size
+                patch_size = spatial_merge_size ** 2
                 for i in range(arr.shape[0]):
                     # calc hpos_id
-                    arr[i, 0] = (i // w_mul_2) * 2 + (i // 2) % 2
+                    arr[i, 0] = (i // patched_row_size) * spatial_merge_size + (i // spatial_merge_size) % spatial_merge_size
 
                     # calc wpos_id
-                    arr[i, 1] = (i // w_mul_2) * 2 + (i // 2) % 2
-        return vec_rot_pos
+                    arr[i, 1] = (i % patched_row_size) // patch_size * spatial_merge_size + i % spatial_merge_size
+            return vec_rot_pos_common
     
     def rot_pos_numba(self, grid_thw: torch.Tensor) -> torch.Tensor:
         vec_rot_pos = self.lazy_compile_vec_rot_pos(self.spatial_merge_size)
 
         pos_ids_list = []
         for t, h, w in grid_thw.tolist():
-            arr = np.empty((h * w, 2), dtype=np.int32)
-            vec_rot_pos(arr, w)
-            pos_ids_list.append(np.tile(arr, (t, 1)))
+            out_arr = np.empty((h * w, 2), dtype=np.int64)
+            vec_rot_pos(out_arr, w)
+            pos_ids_list.append(np.tile(out_arr, (t, 1)))
         
+        # avoid copy when there is only one ndarray
         if len(pos_ids_list) == 1:
             return torch.from_numpy(pos_ids_list[0])
         
@@ -662,27 +663,31 @@ class Qwen2VisionTransformer(nn.Module):
         x: torch.Tensor,
         grid_thw: torch.Tensor,
     ) -> torch.Tensor:
+        # DEBUG
+        assert grid_thw.is_cpu()
+        
+        # compute position ids
+        pos_ids = self.rot_pos_numba(grid_thw).to(device=self.device, non_blocking=True)
+
         # patchify
         x = x.to(device=self.device, dtype=self.dtype)
         x = self.patch_embed(x)
 
         # compute position embedding
-        pos_ids = self.rot_pos_numba(grid_thw)
         max_grid_size = grid_thw[:, 1:].max().item()
         rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
         rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
 
         # compute cu_seqlens
         seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
-                                             grid_thw[:, 0]).cumsum(
-                                                 dim=0, dtype=torch.int32)
-        cu_seqlens = F.pad(seqlens, (1, 0), "constant", 0)
+                                          grid_thw[:, 0])
+        cu_seqlens = F.pad(seqlens.cumsum(dim=0, dtype=torch.int32), (1, 0), "constant", 0)
 
         # transformers
         x = x.unsqueeze(1)
 
-        max_seqlen = None
-        seqlens_list = None
+        max_seqlen: Optional[int] = None
+        seqlens_list: Optional[list[int]] = None
         if self.attn_backend == _Backend.FLASH_ATTN:
             max_seqlen = seqlens.max().item()
         elif self.attn_backend == _Backend.XFORMERS:

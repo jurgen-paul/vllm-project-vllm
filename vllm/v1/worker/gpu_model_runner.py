@@ -357,7 +357,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
                 self.requests[req_id].mrope_positions, \
                     self.requests[req_id].mrope_position_delta = \
-                    MRotaryEmbedding.get_input_positions_tensor(
+                    MRotaryEmbedding.get_input_positions_and_delta(
                         self.requests[req_id].prompt_token_ids,
                         hf_config=hf_config,
                         image_grid_thw=image_grid_thw,
