@@ -87,8 +87,8 @@ try:
             # executes on a background thread, so we need to reset torch's
             # current device.
             if not self.compiled_dag_cuda_device_set:
-                torch_namespace = (
-                    vllm.platforms.current_platform.get_torch_namespace())
+                torch_namespace = \
+                    vllm.platforms.current_platform.get_torch_namespace()
                 torch_namespace.set_device(self.worker.device)
                 self.compiled_dag_cuda_device_set = True
 
@@ -113,8 +113,8 @@ try:
                     # Not needed
                     pass
                 else:
-                    torch_namespace = (
-                        vllm.platforms.current_platform.get_torch_namespace())
+                    torch_namespace = \
+                        vllm.platforms.current_platform.get_torch_namespace()
                     torch_namespace.set_device(self.worker.device)
 
                 self.compiled_dag_cuda_device_set = True
