@@ -663,6 +663,37 @@ class Qwen2VisionTransformer(nn.Module):
         
         return torch.from_numpy(np.concatenate(pos_ids, axis=0))
     
+    def rot_pos_torch_on_device(self, grid_thw: torch.Tensor) -> torch.Tensor:
+        hpos_ids = []
+        wpos_ids = []
+        for t, h, w in grid_thw:
+            patched_row_size = w * self.spatial_merge_size
+            patch_size = self.spatial_merge_size ** 2
+
+            hpos: torch.Tensor = torch.arange(h * w, device=self.device, dtype=torch.int64)
+            wpos: torch.Tensor = torch.arange(h * w, device=self.device, dtype=torch.int64)
+
+            # calc hpos_id
+            hpos = (hpos // patched_row_size) * self.spatial_merge_size + (hpos // self.spatial_merge_size) % self.spatial_merge_size
+
+            # calc wpos_id
+            wpos = (wpos % patched_row_size) // patch_size * self.spatial_merge_size + wpos % self.spatial_merge_size
+
+            hpos_ids.append(hpos.repeat(t))
+            wpos_ids.append(wpos.repeat(t))
+        
+        if len(hpos_ids) == 1:
+            hpos_ids = hpos_ids[0]
+        else:
+            hpos_ids = torch.cat(hpos_ids, dim=0)
+        
+        if len(wpos_ids) == 1:
+            wpos_ids = wpos_ids[0]
+        else:
+            wpos_ids = torch.cat(wpos_ids, dim=0)
+        
+        return torch.stack([hpos_ids, wpos_ids], dim=-1)
+    
     def forward(
         self,
         x: torch.Tensor,
