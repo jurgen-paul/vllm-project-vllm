@@ -24,11 +24,10 @@
 # limitations under the License.
 """Inference-only Qwen2-VL model compatible with HuggingFace weights."""
 from collections.abc import Iterable, Mapping, Sequence
-from functools import cached_property, lru_cache, partial
+from functools import cached_property, partial
 from typing import (Any, Callable, Literal, Optional, Set, Tuple, TypedDict,
                     Union)
 
-from numba import guvectorize
 import numpy as np
 import torch
 import torch.nn as nn
@@ -72,6 +71,7 @@ from vllm.sequence import IntermediateTensors
 from vllm.transformers_utils.config import uses_mrope
 from vllm.transformers_utils.processor import (
     cached_image_processor_from_config)
+from vllm.utils import maybe_numba_jit, IS_NUMBA_AVAILABLE
 
 from .interfaces import SupportsLoRA, SupportsMultiModal, SupportsPP
 from .utils import (AutoWeightsLoader, WeightsMapper,
@@ -612,51 +612,56 @@ class Qwen2VisionTransformer(nn.Module):
             ).permute(0, 2, 1, 3).flatten()
             pos_ids.append(
                 torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1))
+        
+        # avoid copy when there is only one tensor
+        if len(pos_ids) == 1:
+            return pos_ids[0]
+        
         return torch.cat(pos_ids, dim=0)
     
-    @lru_cache(max_size=1)
-    def lazy_compile_vec_rot_pos(self, spatial_merge_size: int):
-        if spatial_merge_size == 2:
-            @guvectorize(["void(int64[:,:],int64)"], "(numel, hpos_and_wpos),()", target="cpu", writable_args=(0, ))
-            def vec_rot_pos_merge_2(arr, w):
-                # optimized version of vec_rot_pos_common (assume spatial_merge_size == 2)
-                w_mul_2 = w * 2
-                for i in range(arr.shape[0]):
-                    # calc hpos_id: (i // (w * 2)) * 2 + (i // 2) % 2
-                    # use bitwise operation for better performance
-                    arr[i, 0] = ((i // w_mul_2) << 1) | ((i >> 1) & 1)
+    @staticmethod
+    @maybe_numba_jit(nopython=True)
+    def _rot_pos_hw_merge_common(arr, w, spatial_merge_size):
+        patched_row_size = w * spatial_merge_size
+        patch_size = spatial_merge_size ** 2
+        for i in range(arr.shape[0]):
+            # calc hpos_id
+            arr[i, 0] = (i // patched_row_size) * spatial_merge_size + (i // spatial_merge_size) % spatial_merge_size
 
-                    # calc wpos_id: (i % (w * 2)) // 4 * 2 + i % 2
-                    # use bitwise operation for better performance
-                    arr[i, 1] = ((i % w_mul_2) >> 2) << 1 | (i & 1)
-            return vec_rot_pos_merge_2
-        else:
-            @guvectorize(["void(int64[:,:],int64)"], "(numel, hpos_and_wpos),()", target="cpu", writable_args=(0, ))
-            def vec_rot_pos_common(arr, w):
-                patched_row_size = w * spatial_merge_size
-                patch_size = spatial_merge_size ** 2
-                for i in range(arr.shape[0]):
-                    # calc hpos_id
-                    arr[i, 0] = (i // patched_row_size) * spatial_merge_size + (i // spatial_merge_size) % spatial_merge_size
+            # calc wpos_id
+            arr[i, 1] = (i % patched_row_size) // patch_size * spatial_merge_size + i % spatial_merge_size
 
-                    # calc wpos_id
-                    arr[i, 1] = (i % patched_row_size) // patch_size * spatial_merge_size + i % spatial_merge_size
-            return vec_rot_pos_common
+    @staticmethod
+    @maybe_numba_jit(nopython=True)
+    def _rot_pos_hw_merge_2(arr, w):
+        # optimized for spatial_merge_size == 2
+        w *= 2
+        for i in range(arr.shape[0]):
+            # calc hpos_id: (i // (w * 2)) * 2 + (i // 2) % 2
+            # use bitwise operation for better performance
+            arr[i, 0] = ((i // w) << 1) | ((i >> 1) & 1)
+
+            # calc wpos_id: (i % (w * 2)) // 4 * 2 + i % 2
+            # use bitwise operation for better performance
+            arr[i, 1] = ((i % w) >> 2) << 1 | (i & 1)
     
     def rot_pos_numba(self, grid_thw: torch.Tensor) -> torch.Tensor:
-        vec_rot_pos = self.lazy_compile_vec_rot_pos(self.spatial_merge_size)
+        if self.spatial_merge_size == 2:
+            rot_pos_hw = self._rot_pos_hw_merge_2
+        else:
+            rot_pos_hw = self._rot_pos_hw_merge_common
 
-        pos_ids_list = []
+        pos_ids = []
         for t, h, w in grid_thw.tolist():
             out_arr = np.empty((h * w, 2), dtype=np.int64)
-            vec_rot_pos(out_arr, w)
-            pos_ids_list.append(np.tile(out_arr, (t, 1)))
+            rot_pos_hw(out_arr, w)
+            pos_ids.append(out_arr.reshape((1, -1)).repeat(t, 0).reshape((-1, 2)))
         
         # avoid copy when there is only one ndarray
-        if len(pos_ids_list) == 1:
-            return torch.from_numpy(pos_ids_list[0])
+        if len(pos_ids) == 1:
+            return torch.from_numpy(pos_ids[0])
         
-        return torch.from_numpy(np.concatenate(pos_ids_list, axis=0))
+        return torch.from_numpy(np.concatenate(pos_ids, axis=0))
     
     def forward(
         self,
@@ -665,10 +670,8 @@ class Qwen2VisionTransformer(nn.Module):
     ) -> torch.Tensor:
         # DEBUG
         assert grid_thw.is_cpu()
+        grid_thw = grid_thw.cpu()
         
-        # compute position ids
-        pos_ids = self.rot_pos_numba(grid_thw).to(device=self.device, non_blocking=True)
-
         # patchify
         x = x.to(device=self.device, dtype=self.dtype)
         x = self.patch_embed(x)
@@ -676,6 +679,11 @@ class Qwen2VisionTransformer(nn.Module):
         # compute position embedding
         max_grid_size = grid_thw[:, 1:].max().item()
         rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
+
+        pos_ids = self.rot_pos_numba(grid_thw) if IS_NUMBA_AVAILABLE \
+            else self.rot_pos_torch(grid_thw)
+        pos_ids = pos_ids.to(device=self.device, non_blocking=True)
+        
         rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
 
         # compute cu_seqlens

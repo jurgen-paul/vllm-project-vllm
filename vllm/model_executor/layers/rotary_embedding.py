@@ -33,6 +33,7 @@ from transformers import PretrainedConfig
 
 from vllm.model_executor.custom_op import CustomOp
 from vllm.platforms import current_platform
+from vllm.utils import maybe_numba_jit, IS_NUMBA_AVAILABLE
 
 def _rotate_neox(x: torch.Tensor) -> torch.Tensor:
     x1 = x[..., :x.shape[-1] // 2]
@@ -850,8 +851,6 @@ class Llama3RotaryEmbedding(RotaryEmbedding):
 class MRotaryEmbedding(RotaryEmbedding):
     """Rotary Embedding with Multimodal Sections."""
 
-    _is_numba_available: ClassVar[Optional[bool]] = None
-
     def __init__(
         self,
         head_size: int,
@@ -872,14 +871,6 @@ class MRotaryEmbedding(RotaryEmbedding):
         self.mrope_section = mrope_section
         if self.mrope_section:
             assert sum(self.mrope_section) == rotary_dim // 2
-
-        if MRotaryEmbedding._is_numba_available is None:
-            try:
-                import numba
-                MRotaryEmbedding._is_numba_available = True
-                self.get_input_positions_numba = MRotaryEmbedding._lazy_compile_get_input_positions_numba()
-            except ImportError:
-                MRotaryEmbedding._is_numba_available = False
 
     def forward(
         self,
@@ -943,7 +934,7 @@ class MRotaryEmbedding(RotaryEmbedding):
     ) -> Tuple[torch.Tensor, int]:
         if backend == "auto":
             if image_grid_thw is not None or video_grid_thw is not None:
-                backend = "numba" if MRotaryEmbedding._is_numba_available else "torch"
+                backend = "numba" if IS_NUMBA_AVAILABLE else "torch"
             else:
                 backend = "plain"
 
@@ -1113,6 +1104,7 @@ class MRotaryEmbedding(RotaryEmbedding):
         return llm_positions
     
     @staticmethod
+    @maybe_numba_jit(nopython=True)
     def get_input_positions_numba(
         input_tokens: np.ndarray,
         image_token_id: int,
@@ -1123,123 +1115,86 @@ class MRotaryEmbedding(RotaryEmbedding):
         video_grid_thw: np.ndarray,
         second_per_grid_ts: np.ndarray,
     ) -> np.ndarray:
-        raise RuntimeError("numba is not available")
+        mrope_pos = np.empty((3, input_tokens.shape[0]), dtype=np.int64)
 
-    @staticmethod
-    def _lazy_compile_get_input_positions_numba():
-        from numba import jit
-        @jit(
-            "int64[:, :](int64[:], int64, int64, int64, float64, int64[:, :], int64[:, :], float64[:])",
-            nopython=True,
-        )
-        def get_input_positions_numba(
-            input_tokens: np.ndarray,
-            image_token_id: int,
-            video_token_id: int,
-            spatial_merge_size: int,
-            tokens_per_second: float,
-            image_grid_thw: np.ndarray,
-            video_grid_thw: np.ndarray,
-            second_per_grid_ts: np.ndarray,
-        ) -> np.ndarray:
-            mrope_pos = np.empty((3, input_tokens.shape[0]), dtype=np.int64)
+        # current mrope `t`
+        cur_t = -1
 
-            # current mrope `t`
-            cur_t = -1
+        # processed or processing image / video index
+        cur_image_idx = -1
+        cur_video_idx = -1
 
-            # processed or processing image / video index
-            cur_image_idx = -1
-            cur_video_idx = -1
+        # previous token id
+        prev_token_id = -1
 
-            # last token id (compared with current token id to trigger operation at then start or end of image or video)
-            last_token = -1
+        # stateful args inside an multi-modal item
+        mm_start_t = 0
+        mm_t_progress = 0
+        mm_h_progress = 0
+        mm_w_progress = 0
+        mm_grid_h = 0
+        mm_grid_w = 0
 
-            # multi-modal item progress
-            mm_start_t = 0
-            mm_t_progress = 0
-            mm_h_progress = 0
-            mm_w_progress = 0
-
-            # used as the next `t` when the image or video is finished
-            next_mrope_t = 0
-
-            # current image's or video's grid height & width
-            llm_grid_h = 0
-            llm_grid_w = 0
-
-            for i, token in enumerate(input_tokens):
-                if token == image_token_id:
-                    if last_token != image_token_id:
-                        cur_image_idx += 1
-                        llm_grid_h = image_grid_thw[cur_image_idx][1] // spatial_merge_size
-                        llm_grid_w = image_grid_thw[cur_image_idx][2] // spatial_merge_size
-                        next_mrope_t = cur_t + max(
-                            image_grid_thw[cur_image_idx][0],
-                            llm_grid_h,
-                            llm_grid_w,
-                        )
-                        cur_t += 1
-                        mm_start_t = cur_t
-                        mm_t_progress = 0
-                        mm_h_progress = 0
-                        mm_w_progress = 0
-                    else:
-                        mm_w_progress += 1
-                        if mm_w_progress >= llm_grid_w:
-                            mm_w_progress = 0
-                            mm_h_progress += 1
-                        if mm_h_progress >= llm_grid_h:
-                            mm_h_progress = 0
-                            mm_t_progress += 1
-                            cur_t += 1
-
-                    mrope_pos[0, i] = cur_t
-                    mrope_pos[1, i] = mm_start_t + mm_h_progress
-                    mrope_pos[2, i] = mm_start_t + mm_w_progress
-                elif token == video_token_id:
-                    if last_token != video_token_id:
-                        cur_video_idx += 1
-                        llm_grid_h = video_grid_thw[cur_video_idx][1] // spatial_merge_size
-                        llm_grid_w = video_grid_thw[cur_video_idx][2] // spatial_merge_size
-                        next_mrope_t = cur_t + max(
-                            1 + int((video_grid_thw[cur_video_idx][0] - 1) * tokens_per_second * second_per_grid_ts[cur_video_idx]),
-                            llm_grid_h,
-                            llm_grid_w,
-                        )
-                        cur_t += 1
-                        mm_start_t = cur_t
-                        mm_t_progress = 0
-                        mm_h_progress = 0
-                        mm_w_progress = 0
-                    else:
-                        mm_w_progress += 1
-                        if mm_w_progress >= llm_grid_w:
-                            mm_w_progress = 0
-                            mm_h_progress += 1
-                        if mm_h_progress >= llm_grid_h:
-                            mm_h_progress = 0
-                            mm_t_progress += 1
-                            cur_t = mm_start_t + int(mm_t_progress * tokens_per_second * second_per_grid_ts[cur_video_idx])
-
-                    mrope_pos[0, i] = cur_t
-                    mrope_pos[1, i] = mm_start_t + mm_h_progress
-                    mrope_pos[2, i] = mm_start_t + mm_w_progress
-                else:
-                    if (
-                        last_token == image_token_id
-                    ) or (
-                        last_token == video_token_id
-                    ):
-                        cur_t = next_mrope_t
+        for i, token_id in enumerate(input_tokens):
+            if token_id == image_token_id:
+                if prev_token_id != image_token_id:
+                    cur_image_idx += 1
+                    mm_grid_h = image_grid_thw[cur_image_idx][1] // spatial_merge_size
+                    mm_grid_w = image_grid_thw[cur_image_idx][2] // spatial_merge_size
                     cur_t += 1
-                    mrope_pos[0, i] = cur_t
-                    mrope_pos[1, i] = cur_t
-                    mrope_pos[2, i] = cur_t
-                last_token = token
+                    mm_start_t = cur_t
+                    mm_t_progress = 0
+                    mm_h_progress = 0
+                    mm_w_progress = 0
+                else:
+                    mm_w_progress += 1
+                    if mm_w_progress >= mm_grid_w:
+                        mm_w_progress = 0
+                        mm_h_progress += 1
+                    if mm_h_progress >= mm_grid_h:
+                        mm_h_progress = 0
+                        mm_t_progress += 1
+                        cur_t += 1
 
-            return mrope_pos
-        return get_input_positions_numba
+                mrope_pos[0, i] = cur_t
+                mrope_pos[1, i] = mm_start_t + mm_h_progress
+                mrope_pos[2, i] = mm_start_t + mm_w_progress
+            elif token_id == video_token_id:
+                if prev_token_id != video_token_id:
+                    cur_video_idx += 1
+                    mm_grid_h = video_grid_thw[cur_video_idx][1] // spatial_merge_size
+                    mm_grid_w = video_grid_thw[cur_video_idx][2] // spatial_merge_size
+                    cur_t += 1
+                    mm_start_t = cur_t
+                    mm_t_progress = 0
+                    mm_h_progress = 0
+                    mm_w_progress = 0
+                else:
+                    mm_w_progress += 1
+                    if mm_w_progress >= mm_grid_w:
+                        mm_w_progress = 0
+                        mm_h_progress += 1
+                    if mm_h_progress >= mm_grid_h:
+                        mm_h_progress = 0
+                        mm_t_progress += 1
+                        cur_t = mm_start_t + int(mm_t_progress * tokens_per_second * second_per_grid_ts[cur_video_idx])
 
+                mrope_pos[0, i] = cur_t
+                mrope_pos[1, i] = mm_start_t + mm_h_progress
+                mrope_pos[2, i] = mm_start_t + mm_w_progress
+            else:
+                if prev_token_id == image_token_id or prev_token_id == video_token_id:
+                    cur_t = max(mrope_pos[0, i - 1], mrope_pos[1, i - 1], mrope_pos[2, i - 1]) + 1
+                else:
+                    cur_t += 1
+                
+                mrope_pos[0, i] = cur_t
+                mrope_pos[1, i] = cur_t
+                mrope_pos[2, i] = cur_t
+            prev_token_id = token_id
+
+        return mrope_pos
+    
     @staticmethod
     def get_next_input_positions(
         mrope_position_delta: int,
