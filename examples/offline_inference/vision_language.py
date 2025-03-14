@@ -218,7 +218,6 @@ def run_idefics3(questions: list[str], modality: str):
 
 # InternVL
 def run_internvl(questions: list[str], modality: str):
-    assert modality == "image"
 
     model_name = "OpenGVLab/InternVL2-2B"
 
@@ -231,10 +230,17 @@ def run_internvl(questions: list[str], modality: str):
 
     tokenizer = AutoTokenizer.from_pretrained(model_name,
                                               trust_remote_code=True)
-    messages = [[{
-        'role': 'user',
-        'content': f"<image>\n{question}"
-    }] for question in questions]
+    if modality == "video":
+        messages = [[{
+            'role': 'user',
+            'content': f"<video>\n{question}"
+        }] for question in questions]
+    elif modality == "image":
+        messages = [[{
+            'role': 'user',
+            'content': f"<image>\n{question}"
+        }] for question in questions]
+
     prompts = tokenizer.apply_chat_template(messages,
                                             tokenize=False,
                                             add_generation_prompt=True)
