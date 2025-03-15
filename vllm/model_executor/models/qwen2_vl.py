@@ -621,40 +621,32 @@ class Qwen2VisionTransformer(nn.Module):
     
     @staticmethod
     @maybe_numba_jit(nopython=True)
-    def _rot_pos_hw_merge_common(arr, w, spatial_merge_size):
-        patched_row_size = w * spatial_merge_size
-        patch_size = spatial_merge_size ** 2
-        for i in range(arr.shape[0]):
-            # calc hpos_id
-            arr[i, 0] = (i // patched_row_size) * spatial_merge_size + (i // spatial_merge_size) % spatial_merge_size
+    def _rot_pos_hw_numba(arr, w, spatial_merge_size):
+        if spatial_merge_size == 2:
+            w *= 2
+            for i in range(arr.shape[0]):
+                # calc hpos_id: (i // (w * 2)) * 2 + (i // 2) % 2
+                # use bitwise operation for better performance
+                arr[i, 0] = ((i // w) << 1) | ((i >> 1) & 1)
 
-            # calc wpos_id
-            arr[i, 1] = (i % patched_row_size) // patch_size * spatial_merge_size + i % spatial_merge_size
+                # calc wpos_id: (i % (w * 2)) // 4 * 2 + i % 2
+                # use bitwise operation for better performance
+                arr[i, 1] = ((i % w) >> 2) << 1 | (i & 1)
+        else:
+            merged_row_size = w * spatial_merge_size
+            merged_grid_size = spatial_merge_size ** 2
+            for i in range(arr.shape[0]):
+                # calc hpos_id
+                arr[i, 0] = (i // merged_row_size) * spatial_merge_size + (i // spatial_merge_size) % spatial_merge_size
 
-    @staticmethod
-    @maybe_numba_jit(nopython=True)
-    def _rot_pos_hw_merge_2(arr, w):
-        # optimized for spatial_merge_size == 2
-        w *= 2
-        for i in range(arr.shape[0]):
-            # calc hpos_id: (i // (w * 2)) * 2 + (i // 2) % 2
-            # use bitwise operation for better performance
-            arr[i, 0] = ((i // w) << 1) | ((i >> 1) & 1)
-
-            # calc wpos_id: (i % (w * 2)) // 4 * 2 + i % 2
-            # use bitwise operation for better performance
-            arr[i, 1] = ((i % w) >> 2) << 1 | (i & 1)
+                # calc wpos_id
+                arr[i, 1] = (i % merged_row_size) // merged_grid_size * spatial_merge_size + i % spatial_merge_size
     
     def rot_pos_numba(self, grid_thw: torch.Tensor) -> torch.Tensor:
-        if self.spatial_merge_size == 2:
-            rot_pos_hw = self._rot_pos_hw_merge_2
-        else:
-            rot_pos_hw = self._rot_pos_hw_merge_common
-
         pos_ids = []
         for t, h, w in grid_thw.tolist():
             out_arr = np.empty((h * w, 2), dtype=np.int64)
-            rot_pos_hw(out_arr, w)
+            self._rot_pos_hw_numba(out_arr, w, self.spatial_merge_size)
             pos_ids.append(out_arr.reshape((1, -1)).repeat(t, 0).reshape((-1, 2)))
         
         # avoid copy when there is only one ndarray
@@ -663,41 +655,40 @@ class Qwen2VisionTransformer(nn.Module):
         
         return torch.from_numpy(np.concatenate(pos_ids, axis=0))
     
-    def rot_pos_torch_on_device(self, grid_thw: torch.Tensor) -> torch.Tensor:
-        hpos_ids = []
-        wpos_ids = []
-        for t, h, w in grid_thw:
-            patched_row_size = w * self.spatial_merge_size
-            patch_size = self.spatial_merge_size ** 2
+    def rot_pos_torch_parallel(self, grid_thw: torch.Tensor) -> torch.Tensor:
+        out = torch.empty(grid_thw.prod(dim=1).sum().item(), 2, 
+                          dtype=torch.int64,
+                          device=grid_thw.device)
+        pos = torch.arange(grid_thw[:, 1:].prod(dim=1).max().item(),
+                           dtype=torch.int64,
+                           device=grid_thw.device)
 
-            hpos: torch.Tensor = torch.arange(h * w, device=self.device, dtype=torch.int64)
-            wpos: torch.Tensor = torch.arange(h * w, device=self.device, dtype=torch.int64)
+        # [0] * spatial_merge_size + [1] * spatial_merge_size + [0] * spatial_merge_size + ...
+        grid_hpos = (pos // self.spatial_merge_size) % self.spatial_merge_size
+        # [0, ..., spatial_merge_size - 1, 0, ..., spatial_merge_size - 1, ...]
+        grid_wpos = pos % self.spatial_merge_size
 
-            # calc hpos_id
-            hpos = (hpos // patched_row_size) * self.spatial_merge_size + (hpos // self.spatial_merge_size) % self.spatial_merge_size
+        start_pos = 0
+        for t, h, w in grid_thw.tolist():
+            hw = h * w
+            seqlen = t * hw
 
-            # calc wpos_id
-            wpos = (wpos % patched_row_size) // patch_size * self.spatial_merge_size + wpos % self.spatial_merge_size
+            row_size = w * self.spatial_merge_size
+            grid_size = self.spatial_merge_size ** 2
+            narrowed_pos = pos[:hw]
 
-            hpos_ids.append(hpos.repeat(t))
-            wpos_ids.append(wpos.repeat(t))
-        
-        if len(hpos_ids) == 1:
-            hpos_ids = hpos_ids[0]
-        else:
-            hpos_ids = torch.cat(hpos_ids, dim=0)
-        
-        if len(wpos_ids) == 1:
-            wpos_ids = wpos_ids[0]
-        else:
-            wpos_ids = torch.cat(wpos_ids, dim=0)
-        
-        return torch.stack([hpos_ids, wpos_ids], dim=-1)
+            dest = out[start_pos:start_pos + seqlen].view(t, hw, 2)
+            dest[:, :, 0] = (narrowed_pos // row_size) * self.spatial_merge_size + grid_hpos[:hw]
+            dest[:, :, 1] = (narrowed_pos % row_size) // grid_size * self.spatial_merge_size + grid_wpos[:hw]
+
+            start_pos += seqlen
+
+        return out
     
     def forward(
         self,
         x: torch.Tensor,
-        grid_thw: torch.Tensor,
+        grid_thw: torch.Tensor, # on CPU
     ) -> torch.Tensor:
         # DEBUG
         assert grid_thw.is_cpu()
@@ -711,9 +702,13 @@ class Qwen2VisionTransformer(nn.Module):
         max_grid_size = grid_thw[:, 1:].max().item()
         rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
 
-        pos_ids = self.rot_pos_numba(grid_thw) if IS_NUMBA_AVAILABLE \
-            else self.rot_pos_torch(grid_thw)
-        pos_ids = pos_ids.to(device=self.device, non_blocking=True)
+        if x.is_cpu():
+            if IS_NUMBA_AVAILABLE:
+                pos_ids = self.rot_pos_numba(grid_thw)
+            else:
+                pos_ids = self.rot_pos_torch(grid_thw)
+        else:
+            pos_ids = self.rot_pos_torch_parallel(grid_thw)
         
         rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
 
