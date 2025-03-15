@@ -656,9 +656,11 @@ class Qwen2VisionTransformer(nn.Module):
         return torch.from_numpy(np.concatenate(pos_ids, axis=0))
     
     def rot_pos_torch_parallel(self, grid_thw: torch.Tensor) -> torch.Tensor:
-        out = torch.empty((cast(int, grid_thw.prod(dim=1).sum().item()), 2),
-                          device=self.device,
-                          dtype=torch.int64)
+        out = torch.empty(
+            (grid_thw.prod(dim=1).sum().item(), 2),
+            device=self.device,
+            dtype=torch.int64,
+        )
 
         max_hw = grid_thw[:, 1:].prod(dim=1).max().item()
         grid_size = self.spatial_merge_size ** 2
