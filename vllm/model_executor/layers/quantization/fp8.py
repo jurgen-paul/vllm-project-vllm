@@ -554,6 +554,16 @@ class Fp8MoEMethod(FusedMoEMethodBase):
             layer.w2_weight = Parameter(w2_weight, requires_grad=False)
             layer.w2_weight_scale_inv = Parameter(w2_weight_scale_inv,
                                                   requires_grad=False)
+            if current_platform.is_rocm_aiter_fp8_block_scaled_moe_enabled():
+                # reshaping weights is required for aiter moe kernel.
+                from aiter.ops.shuffle import shuffle_weight
+
+                layer.w13_weight = torch.nn.Parameter(shuffle_weight(
+                    layer.w13_weight.data),
+                                                      requires_grad=False)
+                layer.w2_weight = torch.nn.Parameter(shuffle_weight(
+                    layer.w2_weight.data),
+                                                     requires_grad=False)
             return
 
         # If checkpoint is fp16, quantize in place.
@@ -581,6 +591,26 @@ class Fp8MoEMethod(FusedMoEMethodBase):
                                                   requires_grad=False)
             layer.w2_weight = torch.nn.Parameter(w2_weight,
                                                  requires_grad=False)
+
+            if current_platform.is_rocm_aiter_moe_enabled():
+                # reshaping weights is required for aiter moe kernel.
+                from aiter.ops.shuffle import shuffle_weight
+
+                w13_scales = layer.w13_weight_scale.data.unsqueeze(
+                    -1).unsqueeze(-1).expand(
+                        (-1, layer.w13_weight.shape[1], -1))
+                w2_scales = layer.w2_weight_scale.data.unsqueeze(-1).unsqueeze(
+                    -1).expand((-1, layer.w2_weight.shape[1], -1))
+                layer.w2_weight_scale = torch.nn.Parameter(
+                    w2_scales.contiguous(), requires_grad=False)
+                layer.w13_weight_scale = torch.nn.Parameter(
+                    w13_scales.contiguous(), requires_grad=False)
+                layer.w13_weight = torch.nn.Parameter(shuffle_weight(
+                    layer.w13_weight),
+                                                      requires_grad=False)
+                layer.w2_weight = torch.nn.Parameter(shuffle_weight(
+                    layer.w2_weight),
+                                                     requires_grad=False)
             return
 
         # If checkpoint is fp8, we need to handle that the
@@ -647,6 +677,23 @@ class Fp8MoEMethod(FusedMoEMethodBase):
                         start:start + shard_size, :], _ = ops.scaled_fp8_quant(
                             dq_weight, max_w13_scales[expert_id])
                     start += shard_size
+
+            if current_platform.is_rocm_aiter_moe_enabled():
+                # reshaping weights is required for aiter moe kernel.
+                from aiter.ops.shuffle import shuffle_weight
+
+                max_w13_scales = max_w13_scales.unsqueeze(-1).unsqueeze(
+                    -1).expand((-1, layer.w13_weight.shape[1], -1))
+                w2_scales = layer.w2_weight_scale.data.unsqueeze(-1).unsqueeze(
+                    -1).expand((-1, layer.w2_weight.shape[1], -1))
+                layer.w2_weight_scale = torch.nn.Parameter(
+                    w2_scales.contiguous(), requires_grad=False)
+                layer.w13_weight = torch.nn.Parameter(shuffle_weight(
+                    layer.w13_weight),
+                                                      requires_grad=False)
+                layer.w2_weight = torch.nn.Parameter(shuffle_weight(
+                    layer.w2_weight),
+                                                     requires_grad=False)
 
             layer.w13_weight_scale = torch.nn.Parameter(max_w13_scales,
                                                         requires_grad=False)

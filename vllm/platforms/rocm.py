@@ -110,6 +110,25 @@ class RocmPlatform(Platform):
         "fbgemm_fp8", "gguf", "quark", "ptpc_fp8"
     ]
 
+    def is_rocm_aiter_moe_enabled(self) -> bool:
+        return envs.VLLM_ROCM_USE_AITER_MOE
+
+    def is_rocm_aiter_paged_attn_enabled(self) -> bool:
+        return envs.VLLM_ROCM_USE_AITER_PAGED_ATTN
+
+    def is_rocm_aiter_linear_enabled(self) -> bool:
+        return envs.VLLM_ROCM_USE_AITER_LINEAR
+
+    def is_rocm_aiter_rmsnorm_enabled(self) -> bool:
+        return envs.VLLM_ROCM_USE_AITER_RMSNORM
+
+    def is_rocm_aiter_fp8_block_scaled_moe_enabled(self) -> bool:
+        return self.is_rocm_aiter_moe_enabled(
+        ) and envs.VLLM_ROCM_USE_AITER_FP8_BLOCK_SCALED_MOE
+
+    def is_rocm_aiter_w8a8_block_gemm_enabled(self) -> bool:
+        return envs.VLLM_ROCM_USE_AITER_W8A8_BLOCK_GEMM
+
     @classmethod
     def get_attn_backend_cls(cls, selected_backend, head_size, dtype,
                              kv_cache_dtype, block_size, use_v1,
