@@ -656,16 +656,30 @@ class Qwen2VisionTransformer(nn.Module):
         return torch.from_numpy(np.concatenate(pos_ids, axis=0))
     
     def rot_pos_torch_parallel(self, grid_thw: torch.Tensor) -> torch.Tensor:
-        out = torch.empty((grid_thw.prod(dim=1).sum().item(), 2), dtype=torch.int64)
+        out = torch.empty((grid_thw.prod(dim=1).sum().item(), 2),
+                          device=self.device,
+                          dtype=torch.int64)
 
         max_hw = grid_thw[:, 1:].prod(dim=1).max().item()
         grid_size = self.spatial_merge_size ** 2
         
-        grid_spatial_pos = torch.arange(0, grid_thw[:, 1:].max().item(), self.spatial_merge_size, dtype=torch.int64)
-        spatial_seq = torch.arange(self.spatial_merge_size, dtype=torch.int64)
+        grid_spatial_pos = torch.arange(0,
+                                        grid_thw[:, 1:].max().item(),
+                                        self.spatial_merge_size,
+                                        device=self.device,
+                                        dtype=torch.int64)
+        spatial_seq = torch.arange(self.spatial_merge_size,
+                                   device=self.device,
+                                   dtype=torch.int64)
 
-        in_block_hpos = spatial_seq.unsqueeze(1).repeat(1, self.spatial_merge_size).view(-1, grid_size).expand(max_hw // grid_size, -1)
-        in_block_wpos = spatial_seq.unsqueeze(0).repeat(1, self.spatial_merge_size).view(-1, grid_size).expand(max_hw // grid_size, -1)
+        in_block_hpos = spatial_seq.unsqueeze(1) \
+            .repeat(1, self.spatial_merge_size) \
+            .view(-1, grid_size) \
+            .expand(max_hw // grid_size, -1)
+        in_block_wpos = spatial_seq.unsqueeze(0) \
+            .repeat(1, self.spatial_merge_size) \
+            .view(-1, grid_size) \
+            .expand(max_hw // grid_size, -1)
 
         start_pos = 0
         for t, h, w in grid_thw.tolist():
@@ -675,13 +689,18 @@ class Qwen2VisionTransformer(nn.Module):
             merged_w = w // self.spatial_merge_size
             merged_hw = merged_h * merged_w
 
-            dest = out[start_pos:start_pos + seqlen].view(t, merged_h, merged_w, grid_size, 2)
+            dest = out[start_pos:start_pos + seqlen].view(
+                t, merged_h, merged_w, grid_size, 2)
             
-            block_hpos = grid_spatial_pos[:merged_h].view(-1, 1, 1).expand(-1, merged_w, grid_size)
-            block_wpos = grid_spatial_pos[:merged_w].view(1, -1, 1).expand(merged_h, -1, grid_size)
+            block_hpos = grid_spatial_pos[:merged_h].view(-1, 1, 1) \
+                .expand(-1, merged_w, grid_size)
+            block_wpos = grid_spatial_pos[:merged_w].view(1, -1, 1) \
+                .expand(merged_h, -1, grid_size)
 
-            dest[:, :, :, :, 0] = block_hpos + in_block_hpos[:merged_hw].view(merged_h, merged_w, grid_size)
-            dest[:, :, :, :, 1] = block_wpos + in_block_wpos[:merged_hw].view(merged_h, merged_w, grid_size)
+            dest[..., 0] = block_hpos + in_block_hpos[:merged_hw] \
+                .view(merged_h, merged_w, grid_size)
+            dest[..., 1] = block_wpos + in_block_wpos[:merged_hw] \
+                .view(merged_h, merged_w, grid_size)
 
             start_pos += seqlen
 
