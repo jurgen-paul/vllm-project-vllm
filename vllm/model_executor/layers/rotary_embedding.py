@@ -1116,86 +1116,60 @@ class MRotaryEmbedding(RotaryEmbedding):
     ) -> np.ndarray:
         mrope_pos = np.empty((3, input_tokens.shape[0]), dtype=np.int64)
 
-        # current mrope `t`
         cur_t = -1
 
-        # processed or processing image / video index
         cur_image_idx = -1
         cur_video_idx = -1
 
-        # previous token id
-        prev_token_id = -1
+        num_images = len(image_grid_thw)
+        num_videos = len(video_grid_thw)
 
-        # stateful args inside an multi-modal item
-        mm_start_t = 0
-        mm_t_progress = 0
-        mm_h_progress = 0
-        mm_w_progress = 0
-        mm_grid_h = 0
-        mm_grid_w = 0
-        tokens_per_grid_t = 0.0
+        i = 0
+        num_input_tokens = len(input_tokens)
 
-        for i, token_id in enumerate(input_tokens):
+        while i < num_input_tokens:
+            token_id = input_tokens[i]
             if token_id == image_token_id:
-                if prev_token_id != image_token_id:
-                    cur_image_idx += 1
-                    mm_grid_h = image_grid_thw[cur_image_idx][1] // spatial_merge_size
-                    mm_grid_w = image_grid_thw[cur_image_idx][2] // spatial_merge_size
-                    cur_t += 1
-                    mm_start_t = cur_t
-                    mm_t_progress = 0
-                    mm_h_progress = 0
-                    mm_w_progress = 0
-                else:
-                    mm_w_progress += 1
-                    if mm_w_progress >= mm_grid_w:
-                        mm_w_progress = 0
-                        mm_h_progress += 1
-                    if mm_h_progress >= mm_grid_h:
-                        mm_h_progress = 0
-                        mm_t_progress += 1
-                        cur_t += 1
+                cur_image_idx += 1
+                assert cur_image_idx < num_images, "mrope image_grid_thw index out of range"
 
-                mrope_pos[0, i] = cur_t
-                mrope_pos[1, i] = mm_start_t + mm_h_progress
-                mrope_pos[2, i] = mm_start_t + mm_w_progress
+                start_t = cur_t + 1
+
+                for t in range(image_grid_thw[cur_image_idx][0]):
+                    for h in range(image_grid_thw[cur_image_idx][1] // spatial_merge_size):
+                        for w in range(image_grid_thw[cur_image_idx][2] // spatial_merge_size):
+                            mrope_pos[0, i] = start_t + t
+                            mrope_pos[1, i] = start_t + h
+                            mrope_pos[2, i] = start_t + w
+                            i += 1
+                            if i >= num_input_tokens:
+                                return mrope_pos
+                            
+                cur_t = max(mrope_pos[0, i - 1], mrope_pos[1, i - 1], mrope_pos[2, i - 1])
             elif token_id == video_token_id:
-                if prev_token_id != video_token_id:
-                    cur_video_idx += 1
-                    mm_grid_h = video_grid_thw[cur_video_idx][1] // spatial_merge_size
-                    mm_grid_w = video_grid_thw[cur_video_idx][2] // spatial_merge_size
-                    cur_t += 1
-                    mm_start_t = cur_t
-                    mm_t_progress = 0
-                    mm_h_progress = 0
-                    mm_w_progress = 0
-                    if cur_video_idx < len(second_per_grid_ts):
-                        tokens_per_grid_t = tokens_per_second * second_per_grid_ts[cur_video_idx]
-                    else:
-                        tokens_per_grid_t = tokens_per_second
-                else:
-                    mm_w_progress += 1
-                    if mm_w_progress >= mm_grid_w:
-                        mm_w_progress = 0
-                        mm_h_progress += 1
-                    if mm_h_progress >= mm_grid_h:
-                        mm_h_progress = 0
-                        mm_t_progress += 1
-                        cur_t = mm_start_t + int(mm_t_progress * tokens_per_grid_t)
+                cur_video_idx += 1
+                assert cur_video_idx < num_videos, "mrope video_grid_thw index out of range"
 
-                mrope_pos[0, i] = cur_t
-                mrope_pos[1, i] = mm_start_t + mm_h_progress
-                mrope_pos[2, i] = mm_start_t + mm_w_progress
-            else:
-                if prev_token_id == image_token_id or prev_token_id == video_token_id:
-                    cur_t = max(mrope_pos[0, i - 1], mrope_pos[1, i - 1], mrope_pos[2, i - 1]) + 1
-                else:
-                    cur_t += 1
+                start_t = cur_t + 1
+                tokens_per_grid_t = tokens_per_second * second_per_grid_ts[cur_video_idx]
+
+                for t in range(video_grid_thw[cur_video_idx][0]):
+                    for h in range(video_grid_thw[cur_video_idx][1] // spatial_merge_size):
+                        for w in range(video_grid_thw[cur_video_idx][2] // spatial_merge_size):
+                            mrope_pos[0, i] = start_t + int(t * tokens_per_grid_t)
+                            mrope_pos[1, i] = start_t + h
+                            mrope_pos[2, i] = start_t + w
+                            i += 1
+                            if i >= num_input_tokens:
+                                return mrope_pos
                 
+                cur_t = max(mrope_pos[0, i - 1], mrope_pos[1, i - 1], mrope_pos[2, i - 1])
+            else:
+                cur_t += 1
                 mrope_pos[0, i] = cur_t
                 mrope_pos[1, i] = cur_t
                 mrope_pos[2, i] = cur_t
-            prev_token_id = token_id
+                i += 1
 
         return mrope_pos
     
