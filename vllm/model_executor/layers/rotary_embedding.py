@@ -1114,7 +1114,8 @@ class MRotaryEmbedding(RotaryEmbedding):
         video_grid_thw: np.ndarray,
         second_per_grid_ts: np.ndarray,
     ) -> np.ndarray:
-        mrope_pos = np.empty((3, input_tokens.shape[0]), dtype=np.int64)
+        num_input_tokens = len(input_tokens)
+        mrope_pos = np.empty((3, num_input_tokens), dtype=np.int64)
 
         cur_t = -1
 
@@ -1125,8 +1126,6 @@ class MRotaryEmbedding(RotaryEmbedding):
         num_videos = len(video_grid_thw)
 
         i = 0
-        num_input_tokens = len(input_tokens)
-
         while i < num_input_tokens:
             token_id = input_tokens[i]
             if token_id == image_token_id:
