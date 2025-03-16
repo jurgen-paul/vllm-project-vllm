@@ -71,7 +71,7 @@ from vllm.sequence import IntermediateTensors
 from vllm.transformers_utils.config import uses_mrope
 from vllm.transformers_utils.processor import (
     cached_image_processor_from_config)
-from vllm.utils import maybe_numba_jit, IS_NUMBA_AVAILABLE
+from vllm.utils import maybe_numba_jit, NUMBA_AVAILABLE
 
 from .interfaces import SupportsLoRA, SupportsMultiModal, SupportsPP
 from .utils import (AutoWeightsLoader, WeightsMapper,
@@ -621,89 +621,44 @@ class Qwen2VisionTransformer(nn.Module):
     
     @staticmethod
     @maybe_numba_jit(nopython=True)
-    def _rot_pos_hw_numba(arr, w, spatial_merge_size):
+    def _rot_pos_numba(grid_thw, spatial_merge_size):
+        l = 0
+        for i in range(len(grid_thw)):
+            l += grid_thw[i][0] * grid_thw[i][1] * grid_thw[i][2]
+        
+        arr = np.empty((l, 2), dtype=np.int64)
+        pos = 0
         if spatial_merge_size == 2:
-            w *= 2
-            for i in range(arr.shape[0]):
-                # calc hpos_id: (i // (w * 2)) * 2 + (i // 2) % 2
-                # use bitwise operation for better performance
-                arr[i, 0] = ((i // w) << 1) | ((i >> 1) & 1)
-
-                # calc wpos_id: (i % (w * 2)) // 4 * 2 + i % 2
-                # use bitwise operation for better performance
-                arr[i, 1] = ((i % w) >> 2) << 1 | (i & 1)
+            for i in range(len(grid_thw)):
+                for _ in range(grid_thw[i][0]):
+                    for h in range(0, grid_thw[i][1], 2):
+                        for w in range(0, grid_thw[i][2], 2):
+                            arr[pos, 0] = h
+                            arr[pos, 1] = w
+                            pos += 1
+                            arr[pos, 0] = h
+                            arr[pos, 1] = w + 1
+                            pos += 1
+                            arr[pos, 0] = h + 1
+                            arr[pos, 1] = w
+                            pos += 1
+                            arr[pos, 0] = h + 1
+                            arr[pos, 1] = w + 1
+                            pos += 1
         else:
-            merged_row_size = w * spatial_merge_size
-            merged_grid_size = spatial_merge_size ** 2
-            for i in range(arr.shape[0]):
-                # calc hpos_id
-                arr[i, 0] = (i // merged_row_size) * spatial_merge_size + (i // spatial_merge_size) % spatial_merge_size
-
-                # calc wpos_id
-                arr[i, 1] = (i % merged_row_size) // merged_grid_size * spatial_merge_size + i % spatial_merge_size
+            for i in range(len(grid_thw)):
+                for _ in range(grid_thw[i][0]):
+                    for h in range(0, grid_thw[i][1], spatial_merge_size):
+                        for w in range(0, grid_thw[i][2], spatial_merge_size):
+                            for m_x in range(spatial_merge_size):
+                                for m_y in range(spatial_merge_size):
+                                    arr[pos, 0] = h + m_x
+                                    arr[pos, 1] = w + m_y
+                                    pos += 1
+        return arr
     
     def rot_pos_numba(self, grid_thw: torch.Tensor) -> torch.Tensor:
-        pos_ids = []
-        for t, h, w in grid_thw.tolist():
-            out_arr = np.empty((h * w, 2), dtype=np.int64)
-            self._rot_pos_hw_numba(out_arr, w, self.spatial_merge_size)
-            pos_ids.append(out_arr.reshape((1, -1)).repeat(t, 0).reshape((-1, 2)))
-        
-        # avoid copy when there is only one ndarray
-        if len(pos_ids) == 1:
-            return torch.from_numpy(pos_ids[0])
-        
-        return torch.from_numpy(np.concatenate(pos_ids, axis=0))
-    
-    def rot_pos_torch_parallel(self, grid_thw: torch.Tensor) -> torch.Tensor:
-        out = torch.empty(
-            grid_thw.prod(dim=1).sum().item(), 2,
-            dtype=torch.int64,
-            device=self.device,
-        )
-
-        grid_size = self.spatial_merge_size * self.spatial_merge_size
-        
-        block_pos = torch.arange(0,
-                                 grid_thw[:, 1:].max(),
-                                 self.spatial_merge_size,
-                                 dtype=torch.int64,
-                                 device=self.device,
-                                )
-        spatial_seq = torch.arange(self.spatial_merge_size,
-                                   dtype=torch.int64,
-                                   device=self.device,
-                                  )
-
-        common_hdelta = spatial_seq.unsqueeze(1) \
-            .repeat(1, self.spatial_merge_size) \
-            .view(grid_size)
-        common_wdelta = spatial_seq.repeat(self.spatial_merge_size)
-
-        start_pos = 0
-        l: list[list[int]] = grid_thw.tolist()
-        for t, h, w in l:
-            seqlen = t * h * w
-
-            merged_h = h // self.spatial_merge_size
-            merged_w = w // self.spatial_merge_size
-
-            block_hpos = block_pos[:merged_h] \
-                .view(-1, 1, 1) \
-                .expand(-1, merged_w, grid_size)
-            block_wpos = block_pos[:merged_w] \
-                .view(1, -1, 1) \
-                .expand(merged_h, -1, grid_size)
-            
-            narrowed_out = out.narrow(0, start_pos, seqlen).view(
-                t, merged_h, merged_w, grid_size, 2)
-            
-            narrowed_out[..., 0] = block_hpos + common_hdelta
-            narrowed_out[..., 1] = block_wpos + common_wdelta
-
-            start_pos += seqlen
-
-        return out
+        return torch.from_numpy(self._rot_pos_numba(grid_thw.numpy(), self.spatial_merge_size))
     
     def forward(
         self,
@@ -722,13 +677,11 @@ class Qwen2VisionTransformer(nn.Module):
         max_grid_size = grid_thw[:, 1:].max().item()
         rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
 
-        if x.is_cpu():
-            if IS_NUMBA_AVAILABLE:
-                pos_ids = self.rot_pos_numba(grid_thw)
-            else:
-                pos_ids = self.rot_pos_torch(grid_thw)
+        if NUMBA_AVAILABLE:
+            pos_ids = self.rot_pos_numba(grid_thw)
         else:
-            pos_ids = self.rot_pos_torch_parallel(grid_thw)
+            pos_ids = self.rot_pos_torch(grid_thw)
+        pos_ids = pos_ids.to(self.device, non_blocking=True)
         
         rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
 

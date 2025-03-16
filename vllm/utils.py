@@ -2381,15 +2381,13 @@ def swap_dict_values(obj: dict[_K, _V], key1: _K, key2: _K) -> None:
 try:
     import numba
     maybe_numba_jit = numba.jit
-    IS_NUMBA_AVAILABLE = True
+    NUMBA_AVAILABLE = True
 except ImportError:
-    IS_NUMBA_AVAILABLE = False
+    NUMBA_AVAILABLE = False
 
     def maybe_numba_jit(signature_or_function=None, locals={}, cache=False,
         pipeline_class=None, boundscheck=None, **options):
         def wrapper(*args, **kwargs):
-            raise RuntimeError("numba is not installed. Please install numba to use this function.")
+            raise RuntimeError("numba is not installed. "
+                               "Please install numba to use this function.")
         return wrapper
-
-def is_numba_available() -> bool:
-    return _NUMBA_AVAILABLE

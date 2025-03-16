@@ -33,7 +33,7 @@ from transformers import PretrainedConfig
 
 from vllm.model_executor.custom_op import CustomOp
 from vllm.platforms import current_platform
-from vllm.utils import maybe_numba_jit, IS_NUMBA_AVAILABLE
+from vllm.utils import maybe_numba_jit, NUMBA_AVAILABLE
 
 def _rotate_neox(x: torch.Tensor) -> torch.Tensor:
     x1 = x[..., :x.shape[-1] // 2]
@@ -924,22 +924,19 @@ class MRotaryEmbedding(RotaryEmbedding):
     @staticmethod
     def get_input_positions_and_delta(
         input_tokens: Union[list[int], np.ndarray],
-        hf_config: any,
+        hf_config: PretrainedConfig,
         image_grid_thw: Optional[Union[list[list[int]], torch.Tensor]],
         video_grid_thw: Optional[Union[list[list[int]], torch.Tensor]],
         second_per_grid_ts: Optional[list[float]],
         context_len: int = 0,
         seq_len: Optional[int] = None,
         backend: Literal["numba", "torch", "auto"] = "auto",
-    ) -> Tuple[torch.Tensor, int]:
+    ) -> tuple[torch.Tensor, int]:
         if backend == "auto":
             if image_grid_thw is not None or video_grid_thw is not None:
-                backend = "numba" if IS_NUMBA_AVAILABLE else "torch"
+                backend = "numba" if NUMBA_AVAILABLE else "torch"
             else:
                 backend = "plain"
-
-        if second_per_grid_ts is None:
-            second_per_grid_ts = []
 
         if backend == "numba":
             if image_grid_thw is None or len(image_grid_thw) == 0:
@@ -962,6 +959,11 @@ class MRotaryEmbedding(RotaryEmbedding):
                     second_per_grid_ts,
                     np.ones(len(video_grid_thw) - len(second_per_grid_ts), dtype=np.float64),
                 ])
+
+            if second_per_grid_ts is None:
+                second_per_grid_ts = np.empty((0, ), dtype=np.float64)
+            else:
+                second_per_grid_ts = np.array(second_per_grid_ts, dtype=np.float64)
             
             input_positions = MRotaryEmbedding.get_input_positions_numba(
                 input_tokens=np.asarray(input_tokens, dtype=np.int64),
@@ -984,6 +986,9 @@ class MRotaryEmbedding(RotaryEmbedding):
             elif isinstance(video_grid_thw, torch.Tensor):
                 video_grid_thw = video_grid_thw.tolist()
 
+            if second_per_grid_ts is None:
+                second_per_grid_ts = []
+
             if isinstance(input_tokens, np.ndarray):
                 input_tokens = torch.from_numpy(input_tokens)
 
@@ -998,7 +1003,8 @@ class MRotaryEmbedding(RotaryEmbedding):
                 video_grid_thw=video_grid_thw,
                 second_per_grid_ts=second_per_grid_ts,
             )
-        else: # text-only prompt
+        else:
+            # text-only prompt
             input_positions = torch.arange(len(input_tokens)).expand(3, -1)
 
         mrope_position_delta = input_positions[:, -1].max().item() + 1 - len(input_tokens)
@@ -1134,6 +1140,7 @@ class MRotaryEmbedding(RotaryEmbedding):
         mm_w_progress = 0
         mm_grid_h = 0
         mm_grid_w = 0
+        tokens_per_grid_t = 0.0
 
         for i, token_id in enumerate(input_tokens):
             if token_id == image_token_id:
@@ -1169,6 +1176,10 @@ class MRotaryEmbedding(RotaryEmbedding):
                     mm_t_progress = 0
                     mm_h_progress = 0
                     mm_w_progress = 0
+                    if cur_video_idx < len(second_per_grid_ts):
+                        tokens_per_grid_t = tokens_per_second * second_per_grid_ts[cur_video_idx]
+                    else:
+                        tokens_per_grid_t = tokens_per_second
                 else:
                     mm_w_progress += 1
                     if mm_w_progress >= mm_grid_w:
@@ -1177,7 +1188,7 @@ class MRotaryEmbedding(RotaryEmbedding):
                     if mm_h_progress >= mm_grid_h:
                         mm_h_progress = 0
                         mm_t_progress += 1
-                        cur_t = mm_start_t + int(mm_t_progress * tokens_per_second * second_per_grid_ts[cur_video_idx])
+                        cur_t = mm_start_t + int(mm_t_progress * tokens_per_grid_t)
 
                 mrope_pos[0, i] = cur_t
                 mrope_pos[1, i] = mm_start_t + mm_h_progress
