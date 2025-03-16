@@ -953,13 +953,6 @@ class MRotaryEmbedding(RotaryEmbedding):
             else:
                 video_grid_thw = np.array(video_grid_thw, dtype=np.int64)
 
-            second_per_grid_ts = np.array(second_per_grid_ts, dtype=np.float64)
-            if len(second_per_grid_ts) < len(video_grid_thw):
-                second_per_grid_ts = np.concatenate([
-                    second_per_grid_ts,
-                    np.ones(len(video_grid_thw) - len(second_per_grid_ts), dtype=np.float64),
-                ])
-
             if second_per_grid_ts is None:
                 second_per_grid_ts = np.empty((0, ), dtype=np.float64)
             else:
