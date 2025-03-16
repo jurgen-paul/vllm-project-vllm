@@ -657,52 +657,49 @@ class Qwen2VisionTransformer(nn.Module):
     
     def rot_pos_torch_parallel(self, grid_thw: torch.Tensor) -> torch.Tensor:
         out = torch.empty(
-            (grid_thw.prod(dim=1).sum().item(), 2),
-            device=self.device,
+            grid_thw.prod(dim=1).sum().item(), 2,
             dtype=torch.int64,
+            device=self.device,
         )
 
-        max_hw = grid_thw[:, 1:].prod(dim=1).max().item()
-        grid_size = self.spatial_merge_size ** 2
+        grid_size = self.spatial_merge_size * self.spatial_merge_size
         
         block_pos = torch.arange(0,
-                                 grid_thw[:, 1:].max().item(),
+                                 grid_thw[:, 1:].max(),
                                  self.spatial_merge_size,
+                                 dtype=torch.int64,
                                  device=self.device,
-                                 dtype=torch.int64)
+                                )
         spatial_seq = torch.arange(self.spatial_merge_size,
+                                   dtype=torch.int64,
                                    device=self.device,
-                                   dtype=torch.int64)
+                                  )
 
-        block_hdelta = spatial_seq.unsqueeze(1) \
+        common_hdelta = spatial_seq.unsqueeze(1) \
             .repeat(1, self.spatial_merge_size) \
-            .view(-1, grid_size) \
-            .expand(max_hw // grid_size, -1)
-        block_wdelta = spatial_seq.unsqueeze(0) \
-            .repeat(1, self.spatial_merge_size) \
-            .view(-1, grid_size) \
-            .expand(max_hw // grid_size, -1)
+            .view(grid_size)
+        common_wdelta = spatial_seq.repeat(self.spatial_merge_size)
 
         start_pos = 0
-        for t, h, w in grid_thw.tolist():
+        l: list[list[int]] = grid_thw.tolist()
+        for t, h, w in l:
             seqlen = t * h * w
 
             merged_h = h // self.spatial_merge_size
             merged_w = w // self.spatial_merge_size
-            merged_hw = merged_h * merged_w
 
+            block_hpos = block_pos[:merged_h] \
+                .view(-1, 1, 1) \
+                .expand(-1, merged_w, grid_size)
+            block_wpos = block_pos[:merged_w] \
+                .view(1, -1, 1) \
+                .expand(merged_h, -1, grid_size)
+            
             narrowed_out = out.narrow(0, start_pos, seqlen).view(
                 t, merged_h, merged_w, grid_size, 2)
             
-            block_hpos = block_pos[:merged_h].view(-1, 1, 1) \
-                .expand(-1, merged_w, grid_size)
-            block_wpos = block_pos[:merged_w].view(1, -1, 1) \
-                .expand(merged_h, -1, grid_size)
-
-            narrowed_out[..., 0] = block_hpos + block_hdelta[:merged_hw] \
-                .view(merged_h, merged_w, grid_size)
-            narrowed_out[..., 1] = block_wpos + block_wdelta[:merged_hw] \
-                .view(merged_h, merged_w, grid_size)
+            narrowed_out[..., 0] = block_hpos + common_hdelta
+            narrowed_out[..., 1] = block_wpos + common_wdelta
 
             start_pos += seqlen
 
