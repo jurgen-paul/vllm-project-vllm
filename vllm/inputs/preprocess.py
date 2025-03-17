@@ -389,6 +389,7 @@ class InputPreprocessor:
                     multi_modal_data,
                     mm_processor_kwargs,
                     lora_request=lora_request,
+                    return_mm_hashes=return_mm_hashes,
                 )
 
             prompt_token_ids = self._tokenize_prompt(
@@ -411,6 +412,7 @@ class InputPreprocessor:
         prompt: SingletonPrompt,
         request_id: str,
         lora_request: Optional[LoRARequest] = None,
+        return_mm_hashes: bool = False,
     ) -> SingletonInputs:
         """Async version of :meth:`_extract_prompt_components`."""
         parsed = parse_singleton_prompt(prompt)
@@ -441,6 +443,7 @@ class InputPreprocessor:
                     multi_modal_data,
                     mm_processor_kwargs,
                     lora_request=lora_request,
+                    return_mm_hashes=return_mm_hashes,
                 )
 
             return token_inputs(
@@ -462,6 +465,7 @@ class InputPreprocessor:
                     multi_modal_data,
                     mm_processor_kwargs,
                     lora_request=lora_request,
+                    return_mm_hashes=return_mm_hashes,
                 )
 
             prompt_token_ids = await self._tokenize_prompt_async(
@@ -738,6 +742,7 @@ class InputPreprocessor:
             request_id=request_id,
             tokenization_kwargs=tokenization_kwargs,
             lora_request=lora_request,
+            return_mm_hashes=return_mm_hashes,
         )
 
         return self._build_decoder_only_llm_inputs(
@@ -758,6 +763,7 @@ class InputPreprocessor:
             prompt,
             request_id=request_id,
             lora_request=lora_request,
+            return_mm_hashes=return_mm_hashes,
         )
 
         return self._build_decoder_only_llm_inputs(
