@@ -14,9 +14,8 @@ from vllm.inputs import PromptType
 from vllm.platforms import current_platform
 from vllm.sampling_params import RequestOutputKind
 from vllm.v1.engine.async_llm import AsyncLLM
-from vllm.v1.metrics.loggers import (PROMETHEUS_LOGGING_LOGGER_NAME,
-                                     STANDARD_LOGGING_LOGGER_NAME,
-                                     LoggingStatLogger, StatLoggerBase)
+from vllm.v1.metrics.loggers import (BuiltinLoggerName, LoggingStatLogger,
+                                     StatLoggerBase)
 
 if not current_platform.is_cuda():
     pytest.skip(reason="V1 currently only supported on CUDA.",
@@ -263,8 +262,8 @@ async def test_customize_loggers(
         after.callback(engine.shutdown)
 
         if loggers is None:
-            engine.remove_logger(PROMETHEUS_LOGGING_LOGGER_NAME)
-            engine.remove_logger(STANDARD_LOGGING_LOGGER_NAME)
+            engine.remove_logger(BuiltinLoggerName.PROMETHEUS)
+            engine.remove_logger(BuiltinLoggerName.LOGGING)
             engine.add_logger(TEST_LOGGER_NAME, get_customized_logger_mock())
 
         await engine.do_log_stats()
