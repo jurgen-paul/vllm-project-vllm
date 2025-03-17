@@ -128,6 +128,13 @@ def run_with_both_engines(request, monkeypatch):
     yield
 
 
+@pytest.fixture(params=[True, False])
+def run_with_and_without_numba(monkeypatch, request):
+    numba_available = request.param
+    monkeypatch.setattr("vllm.utils._NUMBA_AVAILABLE", numba_available)
+    yield
+
+
 @pytest.fixture(autouse=True)
 def init_test_http_connection():
     # pytest_asyncio may use a different event loop per test

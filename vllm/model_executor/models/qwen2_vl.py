@@ -71,7 +71,7 @@ from vllm.sequence import IntermediateTensors
 from vllm.transformers_utils.config import uses_mrope
 from vllm.transformers_utils.processor import (
     cached_image_processor_from_config)
-from vllm.utils import maybe_numba_jit, NUMBA_AVAILABLE
+from vllm.utils import maybe_numba_jit, is_numba_available
 
 from .interfaces import SupportsLoRA, SupportsMultiModal, SupportsPP
 from .utils import (AutoWeightsLoader, WeightsMapper,
@@ -677,7 +677,7 @@ class Qwen2VisionTransformer(nn.Module):
         max_grid_size = grid_thw[:, 1:].max().item()
         rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
 
-        if NUMBA_AVAILABLE:
+        if is_numba_available():
             pos_ids = self.rot_pos_numba(grid_thw)
         else:
             pos_ids = self.rot_pos_torch(grid_thw)

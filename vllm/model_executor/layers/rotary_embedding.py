@@ -23,8 +23,7 @@
 # limitations under the License.
 """Rotary Positional Embeddings."""
 import math
-from functools import lru_cache
-from typing import Any, Dict, List, Optional, Tuple, Union, Literal, ClassVar
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -33,7 +32,7 @@ from transformers import PretrainedConfig
 
 from vllm.model_executor.custom_op import CustomOp
 from vllm.platforms import current_platform
-from vllm.utils import maybe_numba_jit, NUMBA_AVAILABLE
+from vllm.utils import maybe_numba_jit, is_numba_available
 
 def _rotate_neox(x: torch.Tensor) -> torch.Tensor:
     x1 = x[..., :x.shape[-1] // 2]
@@ -930,72 +929,66 @@ class MRotaryEmbedding(RotaryEmbedding):
         second_per_grid_ts: Optional[list[float]],
         context_len: int = 0,
         seq_len: Optional[int] = None,
-        backend: Literal["numba", "torch", "auto"] = "auto",
     ) -> tuple[torch.Tensor, int]:
-        if backend == "auto":
-            if image_grid_thw is not None or video_grid_thw is not None:
-                backend = "numba" if NUMBA_AVAILABLE else "torch"
+        if image_grid_thw is not None or video_grid_thw is not None:
+            if is_numba_available():
+                if image_grid_thw is None or len(image_grid_thw) == 0:
+                    image_grid_thw = np.empty((0, 3), dtype=np.int64)
+                elif isinstance(image_grid_thw, torch.Tensor):
+                    image_grid_thw = image_grid_thw.numpy()
+                else:
+                    image_grid_thw = np.array(image_grid_thw, dtype=np.int64)
+
+                if video_grid_thw is None or len(video_grid_thw) == 0:
+                    video_grid_thw = np.empty((0, 3), dtype=np.int64)
+                elif isinstance(video_grid_thw, torch.Tensor):
+                    video_grid_thw = video_grid_thw.numpy()
+                else:
+                    video_grid_thw = np.array(video_grid_thw, dtype=np.int64)
+
+                if second_per_grid_ts is None:
+                    second_per_grid_ts = np.empty((0, ), dtype=np.float64)
+                else:
+                    second_per_grid_ts = np.array(second_per_grid_ts, dtype=np.float64)
+                
+                input_positions = torch.from_numpy(MRotaryEmbedding.get_input_positions_numba(
+                    input_tokens=np.asarray(input_tokens, dtype=np.int64),
+                    image_token_id=hf_config.image_token_id,
+                    video_token_id=hf_config.video_token_id,
+                    spatial_merge_size=hf_config.vision_config.spatial_merge_size,
+                    tokens_per_second=getattr(hf_config.vision_config, "tokens_per_second", 1.0),
+                    image_grid_thw=image_grid_thw,
+                    video_grid_thw=video_grid_thw,
+                    second_per_grid_ts=second_per_grid_ts,
+                ))
             else:
-                backend = "plain"
+                if image_grid_thw is None:
+                    image_grid_thw = []
+                elif isinstance(image_grid_thw, torch.Tensor):
+                    image_grid_thw = image_grid_thw.tolist()
 
-        if backend == "numba":
-            if image_grid_thw is None or len(image_grid_thw) == 0:
-                image_grid_thw = np.empty((0, 3), dtype=np.int64)
-            elif isinstance(image_grid_thw, torch.Tensor):
-                image_grid_thw = image_grid_thw.numpy()
-            else:
-                image_grid_thw = np.array(image_grid_thw, dtype=np.int64)
+                if video_grid_thw is None:
+                    video_grid_thw = []
+                elif isinstance(video_grid_thw, torch.Tensor):
+                    video_grid_thw = video_grid_thw.tolist()
 
-            if video_grid_thw is None or len(video_grid_thw) == 0:
-                video_grid_thw = np.empty((0, 3), dtype=np.int64)
-            elif isinstance(video_grid_thw, torch.Tensor):
-                video_grid_thw = video_grid_thw.numpy()
-            else:
-                video_grid_thw = np.array(video_grid_thw, dtype=np.int64)
+                if second_per_grid_ts is None:
+                    second_per_grid_ts = []
 
-            if second_per_grid_ts is None:
-                second_per_grid_ts = np.empty((0, ), dtype=np.float64)
-            else:
-                second_per_grid_ts = np.array(second_per_grid_ts, dtype=np.float64)
-            
-            input_positions = MRotaryEmbedding.get_input_positions_numba(
-                input_tokens=np.asarray(input_tokens, dtype=np.int64),
-                image_token_id=hf_config.image_token_id,
-                video_token_id=hf_config.video_token_id,
-                spatial_merge_size=hf_config.vision_config.spatial_merge_size,
-                tokens_per_second=getattr(hf_config.vision_config, "tokens_per_second", 1.0),
-                image_grid_thw=image_grid_thw,
-                video_grid_thw=video_grid_thw,
-                second_per_grid_ts=second_per_grid_ts,
-            )
-        elif backend == "torch":
-            if image_grid_thw is None:
-                image_grid_thw = []
-            elif isinstance(image_grid_thw, torch.Tensor):
-                image_grid_thw = image_grid_thw.tolist()
+                if isinstance(input_tokens, np.ndarray):
+                    input_tokens = torch.from_numpy(input_tokens)
 
-            if video_grid_thw is None:
-                video_grid_thw = []
-            elif isinstance(video_grid_thw, torch.Tensor):
-                video_grid_thw = video_grid_thw.tolist()
-
-            if second_per_grid_ts is None:
-                second_per_grid_ts = []
-
-            if isinstance(input_tokens, np.ndarray):
-                input_tokens = torch.from_numpy(input_tokens)
-
-            input_positions = MRotaryEmbedding.get_input_positions_torch(
-                input_tokens=input_tokens,
-                vision_start_token_id=hf_config.vision_start_token_id,
-                image_token_id=hf_config.image_token_id,
-                video_token_id=hf_config.video_token_id,
-                spatial_merge_size=hf_config.vision_config.spatial_merge_size,
-                tokens_per_second=getattr(hf_config.vision_config, "tokens_per_second", 1.0),
-                image_grid_thw=image_grid_thw,
-                video_grid_thw=video_grid_thw,
-                second_per_grid_ts=second_per_grid_ts,
-            )
+                input_positions = MRotaryEmbedding.get_input_positions_torch(
+                    input_tokens=input_tokens,
+                    vision_start_token_id=hf_config.vision_start_token_id,
+                    image_token_id=hf_config.image_token_id,
+                    video_token_id=hf_config.video_token_id,
+                    spatial_merge_size=hf_config.vision_config.spatial_merge_size,
+                    tokens_per_second=getattr(hf_config.vision_config, "tokens_per_second", 1.0),
+                    image_grid_thw=image_grid_thw,
+                    video_grid_thw=video_grid_thw,
+                    second_per_grid_ts=second_per_grid_ts,
+                )
         else:
             # text-only prompt
             input_positions = torch.arange(len(input_tokens)).expand(3, -1)
@@ -1003,9 +996,6 @@ class MRotaryEmbedding(RotaryEmbedding):
         mrope_position_delta = input_positions[:, -1].max().item() + 1 - len(input_tokens)
         if context_len != 0 or seq_len is not None:
             input_positions = input_positions[:, context_len:seq_len]
-
-        if backend == "numba":
-            input_positions = torch.from_numpy(input_positions)
 
         return input_positions, mrope_position_delta
 
