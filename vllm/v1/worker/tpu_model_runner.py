@@ -858,34 +858,32 @@ class TPUModelRunner:
     def capture_model(self) -> None:
         """Compile the model."""
 
-        if len(self.max_num_mm_items_by_modality):
-            for mode, max_items_by_mode in \
-                self.max_num_mm_items_by_modality.items():
-                logger.info(
-                    "Compiling Multimodal %s Encoder with different input"
-                    " shapes.", mode)
-                num_items = 1
-                start = time.perf_counter()
-                while True:
-                    logger.info("  -- mode: %s items: %d", mode, num_items)
-                    batched_dummy_mm_inputs = self._get_mm_dummy_batch(
-                        mode, num_items)
+        for mode, max_items_by_mode in \
+            self.max_num_mm_items_by_modality.items():
+            logger.info(
+                "Compiling Multimodal %s Encoder with different input"
+                " shapes.", mode)
+            num_items = 1
+            start = time.perf_counter()
+            while True:
+                logger.info("  -- mode: %s items: %d", mode, num_items)
+                batched_dummy_mm_inputs = self._get_mm_dummy_batch(
+                    mode, num_items)
 
-                    # Run multimodal encoder.
-                    xm.mark_step()
-                    self.model.get_multimodal_embeddings(
-                        **batched_dummy_mm_inputs)
-                    xm.mark_step()
-                    if num_items >= max_items_by_mode:
-                        break
-                    num_items *= 2
+                # Run multimodal encoder.
+                xm.mark_step()
+                self.model.get_multimodal_embeddings(**batched_dummy_mm_inputs)
+                xm.mark_step()
+                if num_items >= max_items_by_mode:
+                    break
+                num_items *= 2
 
-                xm.wait_device_ops()
+            xm.wait_device_ops()
 
-                end = time.perf_counter()
-                logger.info(
-                    "Multimodal %s Encoder compilation finished in in %.2f "
-                    "[secs].", mode, end - start)
+            end = time.perf_counter()
+            logger.info(
+                "Multimodal %s Encoder compilation finished in in %.2f "
+                "[secs].", mode, end - start)
 
         logger.info("Compiling the model with different input shapes.")
         start = time.perf_counter()
