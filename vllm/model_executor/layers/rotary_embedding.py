@@ -25,6 +25,7 @@
 import math
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from numba import jit
 import numpy as np
 import torch
 import torch.nn as nn
@@ -32,7 +33,6 @@ from transformers import PretrainedConfig
 
 from vllm.model_executor.custom_op import CustomOp
 from vllm.platforms import current_platform
-from vllm.utils import maybe_numba_jit, is_numba_available
 
 def _rotate_neox(x: torch.Tensor) -> torch.Tensor:
     x1 = x[..., :x.shape[-1] // 2]
@@ -929,9 +929,10 @@ class MRotaryEmbedding(RotaryEmbedding):
         second_per_grid_ts: Optional[list[float]],
         context_len: int = 0,
         seq_len: Optional[int] = None,
+        use_numba: bool = True,
     ) -> tuple[torch.Tensor, int]:
         if image_grid_thw is not None or video_grid_thw is not None:
-            if is_numba_available():
+            if use_numba:
                 if image_grid_thw is None or len(image_grid_thw) == 0:
                     image_grid_thw = np.empty((0, 3), dtype=np.int64)
                 elif isinstance(image_grid_thw, torch.Tensor):
@@ -951,7 +952,7 @@ class MRotaryEmbedding(RotaryEmbedding):
                 else:
                     second_per_grid_ts = np.array(second_per_grid_ts, dtype=np.float64)
                 
-                input_positions = torch.from_numpy(MRotaryEmbedding.get_input_positions_numba(
+                input_positions = torch.from_numpy(MRotaryEmbedding._get_input_positions_numba(
                     input_tokens=np.asarray(input_tokens, dtype=np.int64),
                     image_token_id=hf_config.image_token_id,
                     video_token_id=hf_config.video_token_id,
@@ -978,7 +979,7 @@ class MRotaryEmbedding(RotaryEmbedding):
                 if isinstance(input_tokens, np.ndarray):
                     input_tokens = torch.from_numpy(input_tokens)
 
-                input_positions = MRotaryEmbedding.get_input_positions_torch(
+                input_positions = MRotaryEmbedding._get_input_positions_torch(
                     input_tokens=input_tokens,
                     vision_start_token_id=hf_config.vision_start_token_id,
                     image_token_id=hf_config.image_token_id,
@@ -1000,7 +1001,7 @@ class MRotaryEmbedding(RotaryEmbedding):
         return input_positions, mrope_position_delta
 
     @staticmethod
-    def get_input_positions_torch(
+    def _get_input_positions_torch(
         input_tokens: Union[list[int], torch.Tensor],
         vision_start_token_id: int,
         image_token_id: int,
@@ -1093,8 +1094,8 @@ class MRotaryEmbedding(RotaryEmbedding):
         return llm_positions
     
     @staticmethod
-    @maybe_numba_jit(nopython=True)
-    def get_input_positions_numba(
+    @jit(nopython=True)
+    def _get_input_positions_numba(
         input_tokens: np.ndarray,
         image_token_id: int,
         video_token_id: int,

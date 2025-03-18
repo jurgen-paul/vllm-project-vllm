@@ -2377,19 +2377,3 @@ def swap_dict_values(obj: dict[_K, _V], key1: _K, key2: _K) -> None:
         obj[key1] = v2
     else:
         obj.pop(key1, None)
-
-try:
-    import numba
-    maybe_numba_jit = numba.jit
-    _NUMBA_AVAILABLE = True
-except ImportError:
-    _NUMBA_AVAILABLE = False
-
-    def maybe_numba_jit(signature_or_function=None, locals={}, cache=False,
-        pipeline_class=None, boundscheck=None, **options):
-        def wrapper(*args, **kwargs):
-            raise RuntimeError("Trying to use a numba.jit compiled func without numba installed")
-        return wrapper
-
-def is_numba_available() -> bool:
-    return _NUMBA_AVAILABLE

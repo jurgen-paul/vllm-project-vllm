@@ -33,6 +33,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
+from numba import jit
 from transformers import BatchFeature
 from transformers.models.qwen2_vl import (Qwen2VLImageProcessor,
                                           Qwen2VLProcessor)
@@ -71,7 +72,6 @@ from vllm.sequence import IntermediateTensors
 from vllm.transformers_utils.config import uses_mrope
 from vllm.transformers_utils.processor import (
     cached_image_processor_from_config)
-from vllm.utils import maybe_numba_jit, is_numba_available
 
 from .interfaces import SupportsLoRA, SupportsMultiModal, SupportsPP
 from .utils import (AutoWeightsLoader, WeightsMapper,
@@ -593,7 +593,7 @@ class Qwen2VisionTransformer(nn.Module):
     def device(self) -> torch.device:
         return self.patch_embed.proj.weight.device
     
-    def rot_pos_torch(self, grid_thw: torch.Tensor) -> torch.Tensor:
+    def _calc_rot_pos_torch(self, grid_thw: torch.Tensor) -> torch.Tensor:
         pos_ids = []
         for t, h, w in grid_thw:
             hpos_ids = torch.arange(h).unsqueeze(1).expand(-1, w)
@@ -620,8 +620,8 @@ class Qwen2VisionTransformer(nn.Module):
         return torch.cat(pos_ids, dim=0)
     
     @staticmethod
-    @maybe_numba_jit(nopython=True)
-    def _rot_pos_numba(grid_thw, spatial_merge_size):
+    @jit(nopython=True)
+    def _calc_rot_pos_numba(grid_thw, spatial_merge_size):
         l = 0
         for i in range(len(grid_thw)):
             l += grid_thw[i][0] * grid_thw[i][1] * grid_thw[i][2]
@@ -657,8 +657,20 @@ class Qwen2VisionTransformer(nn.Module):
                                     pos += 1
         return arr
     
-    def rot_pos_numba(self, grid_thw: torch.Tensor) -> torch.Tensor:
-        return torch.from_numpy(self._rot_pos_numba(grid_thw.numpy(), self.spatial_merge_size))
+    def rot_pos_emb(self, grid_thw: torch.Tensor) -> torch.Tensor:
+        pos_ids = torch.from_numpy(
+            self._calc_rot_pos_numba(
+                grid_thw.numpy(),
+                self.spatial_merge_size,
+            )
+        )
+        pos_ids = pos_ids.to(self.device, non_blocking=True)
+        
+        max_grid_size = grid_thw[:, 1:].max().item()
+        rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
+
+        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+        return rotary_pos_emb
     
     def forward(
         self,
@@ -674,16 +686,7 @@ class Qwen2VisionTransformer(nn.Module):
         x = self.patch_embed(x)
 
         # compute position embedding
-        max_grid_size = grid_thw[:, 1:].max().item()
-        rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
-
-        if is_numba_available():
-            pos_ids = self.rot_pos_numba(grid_thw)
-        else:
-            pos_ids = self.rot_pos_torch(grid_thw)
-        pos_ids = pos_ids.to(self.device, non_blocking=True)
-        
-        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+        rotary_pos_emb = self.rot_pos_emb(grid_thw)
 
         # compute cu_seqlens
         seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],

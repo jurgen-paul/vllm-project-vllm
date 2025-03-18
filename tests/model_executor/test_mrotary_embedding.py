@@ -127,74 +127,10 @@ test_cases = [
 ]
 
 @pytest.mark.parametrize("test_case", test_cases)
-def test_mrope_get_input_positions_correctness(test_case):
-    input = test_case["input"]
-    spatial_merge_size = test_case["spatial_merge_size"]
-    tokens_per_second = test_case.get("tokens_per_second", 1.0)
-    groundtruth_input_positions = test_case.get("groundtruth_input_positions")
-
-    input_tokens = []
-    image_grid_thw = []
-    video_grid_thw = []
-    second_per_grid_ts = []
-
-    for item in input:
-        if item["type"] == "tokens":
-            input_tokens.extend(item["tokens"])
-        elif item["type"] == "image":
-            input_tokens.extend(create_image(item["t"], item["h"], item["w"], spatial_merge_size))
-            image_grid_thw.append([item["t"], item["h"], item["w"]])
-        elif item["type"] == "video":
-            input_tokens.extend(create_video(item["t"], item["h"], item["w"], spatial_merge_size))
-            video_grid_thw.append([item["t"], item["h"], item["w"]])
-            second_per_grid_ts.append(item["second_per_grid_t"])
-    
-    if len(image_grid_thw) > 0:
-        image_grid_thw = torch.tensor(image_grid_thw, dtype=torch.int64)
-    else:
-        image_grid_thw = torch.empty((0, 3), dtype=torch.int64)
-    
-    if len(video_grid_thw) > 0:
-        video_grid_thw = torch.tensor(video_grid_thw, dtype=torch.int64)
-    else:
-        video_grid_thw = torch.empty((0, 3), dtype=torch.int64)
-
-    torch_output = MRotaryEmbedding.get_input_positions_torch(
-        input_tokens=input_tokens,
-        vision_start_token_id=VISION_START,
-        image_token_id=IMAGE,
-        video_token_id=VIDEO,
-        spatial_merge_size=spatial_merge_size,
-        tokens_per_second=tokens_per_second,
-        image_grid_thw=image_grid_thw,
-        video_grid_thw=video_grid_thw,
-        second_per_grid_ts=second_per_grid_ts,
-    )
-
-    numba_output = torch.from_numpy(MRotaryEmbedding.get_input_positions_numba(
-        input_tokens=np.array(input_tokens, dtype=np.int64),
-        image_token_id=IMAGE,
-        video_token_id=VIDEO,
-        spatial_merge_size=spatial_merge_size,
-        tokens_per_second=tokens_per_second,
-        image_grid_thw=image_grid_thw.numpy(),
-        video_grid_thw=video_grid_thw.numpy(),
-        second_per_grid_ts=np.array(second_per_grid_ts, dtype=np.float64),
-    ))
-
-    assert torch_output.dtype == numba_output.dtype
-    assert torch_output.dtype == groundtruth_input_positions.dtype
-
-    assert torch_output.shape == numba_output.shape
-    assert torch_output.shape == groundtruth_input_positions.shape
-
-    assert torch.equal(torch_output, numba_output)
-    assert torch.equal(torch_output, groundtruth_input_positions)
-
-@pytest.mark.parametrize("test_case", test_cases)
+@pytest.mark.parametrize("use_numba", [True, False])
 def test_mrope_get_input_positions_and_delta_correctness(
-    run_with_and_without_numba,
     test_case,
+    use_numba,
 ):
     input = test_case["input"]
     spatial_merge_size = test_case["spatial_merge_size"]
@@ -244,6 +180,7 @@ def test_mrope_get_input_positions_and_delta_correctness(
         image_grid_thw=image_grid_thw,
         video_grid_thw=video_grid_thw,
         second_per_grid_ts=second_per_grid_ts,
+        use_numba=use_numba,
     )
 
     assert input_positions.dtype == groundtruth_input_positions.dtype
