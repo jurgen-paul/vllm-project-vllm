@@ -525,7 +525,6 @@ class TPUModelRunner:
         encoder_outputs = []
         for grouped_mm_inputs in grouped_mm_inputs_list:
             batched_mm_inputs = MultiModalKwargs.batch(grouped_mm_inputs)
-            # lambda x: x.to(device, non_blocking=True), this is moving
             batched_mm_inputs = MultiModalKwargs.as_kwargs(batched_mm_inputs,
                                                            device=self.device)
 
@@ -813,7 +812,7 @@ class TPUModelRunner:
                                  self.encoder_cache_size)
 
             logger.info(
-                "Encoder cache will be initialized with a budget of %s tokens,"
+                "Encoder cache will be initialized with a budget of %d tokens,"
                 " and profiled with %s %s items of the maximum feature size.",
                 encoder_budget, max_num_mm_items, dummy_data_modality)
 
