@@ -301,6 +301,17 @@ class CudaPlatformBase(Platform):
     def get_stream_cls(cls) -> str:
         return "torch.cuda.Stream"
 
+    @classmethod
+    def get_current_stream(cls) -> str:
+        """
+        Get device specific current stream.
+        """
+        return torch.cuda.current_stream()
+
+    @classmethod
+    def get_event_cls(cls) -> str:
+        return "torch.cuda.Event"
+
 
 # NVML utils
 # Note that NVML is not affected by `CUDA_VISIBLE_DEVICES`,

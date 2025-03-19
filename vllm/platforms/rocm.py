@@ -252,3 +252,14 @@ class RocmPlatform(Platform):
     @classmethod
     def get_stream_cls(cls) -> str:
         return "torch.cuda.Stream"
+
+    @classmethod
+    def get_current_stream(cls) -> str:
+        """
+        Get device specific current stream.
+        """
+        return torch.cuda.current_stream()
+
+    @classmethod
+    def get_event_cls(cls) -> str:
+        return "torch.cuda.Event"

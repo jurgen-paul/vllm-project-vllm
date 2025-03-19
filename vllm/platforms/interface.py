@@ -378,7 +378,21 @@ class Platform:
         """
         Get device specific stream class.
         """
+        return ""
+
+    @classmethod
+    def get_current_stream(cls) -> str:
+        """
+        Get device specific current stream.
+        """
         raise NotImplementedError
+
+    @classmethod
+    def get_event_cls(cls) -> str:
+        """
+        Get device specific event class.
+        """
+        return ""
 
 
 class UnspecifiedPlatform(Platform):
