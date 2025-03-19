@@ -37,10 +37,12 @@ class CompressedTensorsWNA16(CompressedTensorsScheme):
                  strategy: str,
                  num_bits: int,
                  group_size: Optional[int] = None,
+                 symmetric: Optional[bool] = True,
                  actorder: Optional[ActivationOrdering] = None):
 
         self.pack_factor = 32 // num_bits
         self.strategy = strategy
+        self.symmetric = symmetric
         self.group_size = -1 if group_size is None else group_size
         self.has_g_idx = actorder == ActivationOrdering.GROUP
 
@@ -76,7 +78,7 @@ class CompressedTensorsWNA16(CompressedTensorsScheme):
             weight_type=self.quant_type,
             act_type=params_dtype,
             group_size=self.group_size,
-            zero_points=False,
+            zero_points=not self.symmetric,
             has_g_idx=self.has_g_idx
         )
 
@@ -176,6 +178,7 @@ class CompressedTensorsWNA16(CompressedTensorsScheme):
                                   w_s_param_name="weight_scale",
                                   w_zp_param_name="weight_zero_point",
                                   w_gidx_param_name="weight_g_idx")
+        print(self.kernel, type(self.kernel))
 
     # Checkpoints are serialized in compressed-tensors format, which is
     # different from the format the kernel may want. Handle repacking here.
