@@ -221,7 +221,23 @@ def patch_rope_scaling_dict(rope_scaling: Dict[str, Any]) -> None:
 
 def uses_mrope(config: PretrainedConfig) -> bool:
     """Detect if the model with this config uses M-ROPE."""
+    if thinker_uses_mrope(config):
+        return True
+
     rope_scaling = getattr(config, "rope_scaling", None)
+    if rope_scaling is None:
+        return False
+
+    return "mrope_section" in rope_scaling
+
+
+def thinker_uses_mrope(config: PretrainedConfig) -> bool:
+    """Detect if the model contains a thinker config and it uses M-ROPE."""
+    thinker_config = getattr(config, "thinker_config", None)
+    if thinker_config is None:
+        return False
+
+    rope_scaling = getattr(thinker_config, "rope_scaling", None)
     if rope_scaling is None:
         return False
 
@@ -721,6 +737,10 @@ def get_hf_text_config(config: PretrainedConfig):
         # if transformers config doesn't align with this assumption.
         assert hasattr(config.text_config, "num_attention_heads")
         return config.text_config
+    elif hasattr(config, "thinker_config"):
+        # TODO(suyang.fy): Refactor code.
+        #  For Qwen2.5-Omni, change hf_text_config to thinker_config.
+        return config.thinker_config
     else:
         return config
 
