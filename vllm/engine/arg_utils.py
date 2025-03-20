@@ -181,6 +181,7 @@ class EngineArgs:
     speculative_model: Optional[str] = None
     speculative_model_quantization: Optional[str] = None
     speculative_draft_tensor_parallel_size: Optional[int] = None
+    speculative_draft_pipeline_parallel_size: Optional[int] = None
     num_speculative_tokens: Optional[int] = None
     speculative_disable_mqa_scorer: Optional[bool] = False
     speculative_max_model_len: Optional[int] = None
@@ -812,6 +813,13 @@ class EngineArgs:
             default=EngineArgs.speculative_draft_tensor_parallel_size,
             help='Number of tensor parallel replicas for '
             'the draft model in speculative decoding.')
+        parser.add_argument(
+            '--speculative-draft-pipeline-parallel-size',
+            '-spec-draft-pp',
+            type=int,
+            default=EngineArgs.speculative_draft_pipeline_parallel_size,
+            help='Number of pipeline parallel replicas for '
+            'the draft model in speculative decoding.')
 
         parser.add_argument(
             '--speculative-max-model-len',
@@ -1266,6 +1274,8 @@ class EngineArgs:
                 self.speculative_model_quantization,
             speculative_draft_tensor_parallel_size = \
                 self.speculative_draft_tensor_parallel_size,
+            speculative_draft_pipeline_parallel_size = \
+                self.speculative_draft_pipeline_parallel_size,
             num_speculative_tokens=self.num_speculative_tokens,
             speculative_disable_mqa_scorer=self.speculative_disable_mqa_scorer,
             speculative_disable_by_batch_size=self.
