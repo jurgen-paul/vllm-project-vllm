@@ -90,15 +90,14 @@ def test_draft_model_pp_lt_target_model_pp2(model, common_llm_kwargs,
          "--max-num-seqs", "4"
      ]])
 @pytest.mark.parametrize("baseline_llm_kwargs", [[]])
-@pytest.mark.parametrize("model, test_llm_kwargs",
-                         [("JackFram/llama-68m", [
-                              "--speculative-model",
-                              "JackFram/llama-68m",
-                              "--num-speculative-tokens",
-                              "3",
-                              "--speculative-draft-pipeline-parallel-size",
-                              "1",
-                          ])])
+@pytest.mark.parametrize("model, test_llm_kwargs", [("JackFram/llama-68m", [
+    "--speculative-model",
+    "JackFram/llama-68m",
+    "--num-speculative-tokens",
+    "3",
+    "--speculative-draft-pipeline-parallel-size",
+    "1",
+])])
 @pytest.mark.parametrize("logprobs", [None, 2])
 @pytest.mark.parametrize("batch_size", [2])
 @pytest.mark.parametrize("seed", [1])
