@@ -128,13 +128,13 @@ async def get_guided_decoding_logits_processor(
         from vllm.model_executor.guided_decoding.xgrammar_decoding import (  # noqa
             get_local_xgrammar_guided_decoding_logits_processor)
         return get_local_xgrammar_guided_decoding_logits_processor(
-            guided_params, tokenizer, model_config, reasoner, speculative_config)
+            guided_params, tokenizer, model_config, reasoner,
+            speculative_config)
     if guided_params.backend_name == 'guidance':
         from vllm.model_executor.guided_decoding.guidance_decoding import (
             get_local_guidance_guided_decoding_logits_processor)
         return get_local_guidance_guided_decoding_logits_processor(
             guided_params, tokenizer)
-            
 
     raise ValueError(
         f"Unknown guided decoding backend '{guided_params.backend}'. "
@@ -143,11 +143,12 @@ async def get_guided_decoding_logits_processor(
 
 
 def get_local_guided_decoding_logits_processor(
-        guided_params: GuidedDecodingParams,
-        tokenizer: PreTrainedTokenizer,
-        model_config: ModelConfig,
-        reasoning_backend: str | None = None,
-        speculative_config: Optional[SpeculativeConfig] = None) -> LogitsProcessor | None:
+    guided_params: GuidedDecodingParams,
+    tokenizer: PreTrainedTokenizer,
+    model_config: ModelConfig,
+    reasoning_backend: str | None = None,
+    speculative_config: Optional[SpeculativeConfig] = None
+) -> LogitsProcessor | None:
     guided_params = maybe_backend_fallback(guided_params)
 
     # Get the reasoner if needed, it will be None if reasoning_
@@ -169,7 +170,8 @@ def get_local_guided_decoding_logits_processor(
         from vllm.model_executor.guided_decoding.xgrammar_decoding import (  # noqa
             get_local_xgrammar_guided_decoding_logits_processor)
         return get_local_xgrammar_guided_decoding_logits_processor(
-            guided_params, tokenizer, model_config, reasoner, speculative_config)
+            guided_params, tokenizer, model_config, reasoner,
+            speculative_config)
     if guided_params.backend_name == 'guidance':
         from vllm.model_executor.guided_decoding.guidance_decoding import (
             get_local_guidance_guided_decoding_logits_processor)
