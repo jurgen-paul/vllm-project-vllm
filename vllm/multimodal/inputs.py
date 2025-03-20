@@ -383,6 +383,7 @@ class MultiModalFieldConfig:
                 keyword argument.
             slices: For each multi-modal item, a slice that is used to extract
                 the data corresponding to it.
+            dim: The dimension to extract data, default to 0.
 
         Example:
 

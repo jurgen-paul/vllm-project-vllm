@@ -134,10 +134,12 @@ def run_qwen2_audio(question: str, audio_count: int) -> ModelRequestData:
 def run_qwen2_5_omni(question: str, audio_count: int):
     model_name = "Qwen/Qwen2.5-Omni-7B"
 
-    llm = LLM(model=model_name,
-              max_model_len=4096,
-              max_num_seqs=5,
-              limit_mm_per_prompt={"audio": audio_count})
+    engine_args = EngineArgs(
+        model=model_name,
+        max_model_len=4096,
+        max_num_seqs=5,
+        limit_mm_per_prompt={"audio": audio_count},
+    )
 
     audio_in_prompt = "".join([
         "<|audio_bos|><|AUDIO|><|audio_eos|>\n" for idx in range(audio_count)
@@ -152,8 +154,10 @@ def run_qwen2_5_omni(question: str, audio_count: int):
               "<|im_start|>user\n"
               f"{audio_in_prompt}{question}<|im_end|>\n"
               "<|im_start|>assistant\n")
-    stop_token_ids = None
-    return llm, prompt, stop_token_ids
+    return ModelRequestData(
+        engine_args=engine_args,
+        prompt=prompt,
+    )
 
 
 # Ultravox 0.5-1B

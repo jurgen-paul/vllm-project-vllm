@@ -806,10 +806,9 @@ def run_qwen2_5_vl(questions: list[str], modality: str) -> ModelRequestData:
 
 # Qwen2.5-Omni
 def run_qwen2_5_omni(questions: list[str], modality: str):
-
     model_name = "Qwen/Qwen2.5-Omni-7B"
 
-    llm = LLM(
+    engine_args = EngineArgs(
         model=model_name,
         max_model_len=4096,
         max_num_seqs=5,
@@ -835,8 +834,10 @@ def run_qwen2_5_omni(questions: list[str], modality: str):
                 f"<|im_start|>user\n<|vision_bos|>{placeholder}<|vision_eos|>"
                 f"{question}<|im_end|>\n"
                 "<|im_start|>assistant\n") for question in questions]
-    stop_token_ids = None
-    return llm, prompts, stop_token_ids
+    return ModelRequestData(
+        engine_args=engine_args,
+        prompts=prompts,
+    )
 
 
 model_example_map = {

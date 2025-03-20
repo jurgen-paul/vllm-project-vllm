@@ -78,7 +78,7 @@ logger = init_logger(__name__)
 
 def _qwen2_5_omni_thinker_field_config(hf_inputs: Mapping[str, torch.Tensor]):
     audio_feature_lengths = hf_inputs.get("audio_feature_lengths",
-                                          torch.empty((0, 0)))
+                                          torch.empty((0, )))
 
     image_grid_thw = hf_inputs.get("image_grid_thw", torch.empty((0, 3)))
     image_grid_sizes = image_grid_thw.prod(-1)
@@ -581,6 +581,14 @@ class Qwen2_5OmniConditionalGenerationMixin:
 class Qwen2_5OmniThinkerForConditionalGeneration(
         nn.Module, SupportsMultiModal, SupportsPP,
         Qwen2_5OmniConditionalGenerationMixin):
+    hf_to_vllm_mapper = WeightsMapper(
+        orig_to_new_prefix={
+            "thinker.audio_tower.positional_embedding":
+            "audio_tower.positional_embedding",
+            "thinker.lm_head.": "language_model.lm_head.",
+            "thinker.model.": "language_model.model.",
+            "thinker.": "",
+        })
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
@@ -607,8 +615,7 @@ class Qwen2_5OmniThinkerForConditionalGeneration(
         self.visual = Qwen2_5_VisionTransformer(
             vision_config=thinker_config.vision_config,
             norm_eps=getattr(thinker_config, "rms_norm_eps", 1e-6),
-            # quant_config=self._maybe_ignore_quant_config(quant_config),
-            quant_config=None,
+            quant_config=quant_config,
             prefix=maybe_prefix(prefix, "visual"),
         )
         self.quant_config = quant_config
@@ -714,17 +721,8 @@ class Qwen2_5OmniThinkerForConditionalGeneration(
 
     def load_weights(self, weights: Iterable[Tuple[str,
                                                    torch.Tensor]]) -> Set[str]:
-        hf_to_vllm_mapper = WeightsMapper(
-            orig_to_new_prefix={
-                "thinker.audio_tower.positional_embedding":
-                "audio_tower.positional_embedding",
-                "thinker.lm_head.": "language_model.lm_head.",
-                "thinker.model.": "language_model.model.",
-                "thinker.": "",
-            })
-
         loader = AutoWeightsLoader(
             self,
             skip_prefixes=['talker.', 'token2wav.'],
         )
-        return loader.load_weights(weights, mapper=hf_to_vllm_mapper)
+        return loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
