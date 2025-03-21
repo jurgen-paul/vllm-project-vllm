@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Compare the outputs of a GPTQ model to a bitblas model.
 
 Note: GPTQ and bitblas do not have bitwise correctness.
