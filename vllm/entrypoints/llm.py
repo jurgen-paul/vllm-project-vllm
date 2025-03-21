@@ -24,7 +24,8 @@ from vllm.entrypoints.chat_utils import (ChatCompletionMessageParam,
                                          parse_chat_messages,
                                          resolve_chat_template_content_format)
 from vllm.entrypoints.score_utils import (_cosine_similarity,
-                                          _validate_score_input_lens)
+                                          _validate_score_input_lens,
+                                          _validate_truncation_size)
 from vllm.inputs import PromptType, SingletonPrompt, TextPrompt, TokensPrompt
 from vllm.inputs.parse import is_token_prompt, parse_and_batch_prompt
 from vllm.logger import init_logger
@@ -756,6 +757,7 @@ class LLM:
         pooling_params: Optional[Union[PoolingParams,
                                        Sequence[PoolingParams]]] = None,
         *,
+        truncate_prompt_tokens: Optional[int] = None,
         use_tqdm: bool = True,
         lora_request: Optional[Union[list[LoRARequest], LoRARequest]] = None,
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
@@ -770,6 +772,7 @@ class LLM:
         pooling_params: Optional[Union[PoolingParams,
                                        Sequence[PoolingParams]]] = None,
         prompt_token_ids: Optional[list[int]] = None,
+        truncate_prompt_tokens: Optional[int] = None,
         use_tqdm: bool = True,
         lora_request: Optional[Union[list[LoRARequest], LoRARequest]] = None,
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
@@ -784,6 +787,7 @@ class LLM:
         pooling_params: Optional[Union[PoolingParams,
                                        Sequence[PoolingParams]]] = None,
         prompt_token_ids: Optional[list[list[int]]] = None,
+        truncate_prompt_tokens: Optional[int] = None,
         use_tqdm: bool = True,
         lora_request: Optional[Union[list[LoRARequest], LoRARequest]] = None,
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
@@ -799,6 +803,7 @@ class LLM:
                                        Sequence[PoolingParams]]] = None,
         *,
         prompt_token_ids: list[int],
+        truncate_prompt_tokens: Optional[int] = None,
         use_tqdm: bool = True,
         lora_request: Optional[Union[list[LoRARequest], LoRARequest]] = None,
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
@@ -814,6 +819,7 @@ class LLM:
                                        Sequence[PoolingParams]]] = None,
         *,
         prompt_token_ids: list[list[int]],
+        truncate_prompt_tokens: Optional[int] = None,
         use_tqdm: bool = True,
         lora_request: Optional[Union[list[LoRARequest], LoRARequest]] = None,
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
@@ -827,6 +833,7 @@ class LLM:
         prompts: None,
         pooling_params: None,
         prompt_token_ids: Union[list[int], list[list[int]]],
+        truncate_prompt_tokens: Optional[int] = None,
         use_tqdm: bool = True,
         lora_request: Optional[Union[list[LoRARequest], LoRARequest]] = None,
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
@@ -845,6 +852,7 @@ class LLM:
         pooling_params: Optional[Union[PoolingParams,
                                        Sequence[PoolingParams]]] = None,
         prompt_token_ids: Optional[Union[list[int], list[list[int]]]] = None,
+        truncate_prompt_tokens: Optional[int] = None,
         use_tqdm: bool = True,
         lora_request: Optional[Union[list[LoRARequest], LoRARequest]] = None,
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
@@ -904,10 +912,21 @@ class LLM:
             # Use default pooling params.
             pooling_params = PoolingParams()
 
+        if truncate_prompt_tokens is not None:
+            truncate_prompt_tokens = _validate_truncation_size(
+                self.llm_engine.model_config.max_model_len,
+                truncate_prompt_tokens)
+
+        tokenization_kwargs: dict[str, Any] = {}
+        if truncate_prompt_tokens is not None:
+            tokenization_kwargs["truncation"] = True
+            tokenization_kwargs["max_length"] = truncate_prompt_tokens
+
         self._validate_and_add_requests(
             prompts=parsed_prompts,
             params=pooling_params,
             lora_request=lora_request,
+            tokenization_kwargs=tokenization_kwargs,
             prompt_adapter_request=prompt_adapter_request,
         )
 
@@ -920,6 +939,7 @@ class LLM:
         prompts: Union[PromptType, Sequence[PromptType]],
         /,
         *,
+        truncate_prompt_tokens: Optional[int] = None,
         use_tqdm: bool = True,
         lora_request: Optional[Union[list[LoRARequest], LoRARequest]] = None,
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
@@ -949,6 +969,7 @@ class LLM:
                 "Embedding API is only enabled for `--task embed`")
 
         items = self.encode(prompts,
+                            truncate_prompt_tokens=truncate_prompt_tokens,
                             use_tqdm=use_tqdm,
                             lora_request=lora_request,
                             prompt_adapter_request=prompt_adapter_request)
@@ -1008,6 +1029,7 @@ class LLM:
 
         encoded_output: list[PoolingRequestOutput] = self.encode(
             text_1 + text_2,
+            truncate_prompt_tokens=truncate_prompt_tokens,
             use_tqdm=use_tqdm,
             lora_request=lora_request,
             prompt_adapter_request=prompt_adapter_request)
@@ -1051,6 +1073,11 @@ class LLM:
         input_pairs = [(t1, t2) for t1, t2 in zip(text_1, text_2)]
 
         pooling_params = PoolingParams()
+
+        if truncate_prompt_tokens is not None:
+            truncate_prompt_tokens = _validate_truncation_size(
+                self.llm_engine.model_config.max_model_len,
+                truncate_prompt_tokens)
 
         tokenization_kwargs: dict[str, Any] = {}
         if truncate_prompt_tokens is not None:
@@ -1269,6 +1296,7 @@ class LLM:
                       Sequence[PoolingParams]],
         lora_request: Optional[Union[Sequence[LoRARequest], LoRARequest]],
         prompt_adapter_request: Optional[PromptAdapterRequest],
+        tokenization_kwargs: Optional[dict[str, Any]] = None,
         guided_options: Optional[GuidedDecodingRequest] = None,
         priority: Optional[list[int]] = None,
     ) -> None:
@@ -1305,6 +1333,7 @@ class LLM:
             self._add_request(
                 prompt,
                 params[i] if isinstance(params, Sequence) else params,
+                tokenization_kwargs=tokenization_kwargs,
                 lora_request=lora_request[i] if isinstance(
                     lora_request, Sequence) else lora_request,
                 prompt_adapter_request=prompt_adapter_request,
@@ -1315,6 +1344,7 @@ class LLM:
         self,
         prompt: PromptType,
         params: Union[SamplingParams, PoolingParams],
+        tokenization_kwargs: Optional[dict[str, Any]] = None,
         lora_request: Optional[LoRARequest] = None,
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
         priority: int = 0,
@@ -1325,6 +1355,7 @@ class LLM:
             prompt,
             params,
             lora_request=lora_request,
+            tokenization_kwargs=tokenization_kwargs,
             prompt_adapter_request=prompt_adapter_request,
             priority=priority,
         )
