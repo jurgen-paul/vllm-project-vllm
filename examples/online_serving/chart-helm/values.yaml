@@ -1,6 +1,5 @@
 # -- Default values for chart vllm
 # -- Declare variables to be passed into your templates.
-dtype: float16
 
 # -- Image configuration
 image:
