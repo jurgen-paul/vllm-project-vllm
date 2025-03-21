@@ -81,10 +81,10 @@ The table below shows the compatibility of various quantization implementations 
   * ✅︎
   * ✅︎
   * ✅︎
-  * ✗
-  * ✗
-  * ✗
-  * ✗
+  * ❌
+  * ❌
+  * ❌
+  * ❌
 - * AQLM
   * ✅︎
   * ✅︎
