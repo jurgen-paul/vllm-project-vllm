@@ -25,7 +25,7 @@
 """Inference-only Qwen2-VL model compatible with HuggingFace weights."""
 from collections.abc import Iterable, Mapping, Sequence
 from functools import cached_property, partial
-from typing import (Any, Callable, cast, Literal, Optional, Set, Tuple, TypedDict,
+from typing import (Any, Callable, Literal, Optional, Set, Tuple, TypedDict,
                     Union)
 
 import numpy as np

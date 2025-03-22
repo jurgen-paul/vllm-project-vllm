@@ -923,7 +923,7 @@ class MRotaryEmbedding(RotaryEmbedding):
     @classmethod
     def get_input_positions_and_delta(
         cls,
-        input_tokens: list[int],
+        input_tokens: Union[list[int], np.ndarray],
         hf_config: PretrainedConfig,
         image_grid_thw: Optional[Union[list[list[int]], torch.Tensor]],
         video_grid_thw: Optional[Union[list[list[int]], torch.Tensor]],
@@ -942,6 +942,7 @@ class MRotaryEmbedding(RotaryEmbedding):
             (audio_feature_lengths is None or len(audio_feature_lengths) == 0):
             # text-only prompt
             input_positions = torch.arange(len(input_tokens)).expand(3, -1)
+            mrope_position_delta = 0
         else:
             if use_numba:
                 input_tokens = np.asarray(input_tokens, dtype=np.int64)
@@ -972,7 +973,7 @@ class MRotaryEmbedding(RotaryEmbedding):
                         audio_feature_lengths = np.array(audio_feature_lengths, dtype=np.int64)
 
                     thinker_config = hf_config.thinker_config
-                    input_positions = torch.from_numpy(cls._omni_get_input_positions_numba(
+                    input_positions, mrope_position_delta = cls._omni_get_input_positions_numba(
                         input_tokens=input_tokens,
                         image_token_id=int(thinker_config.image_token_index),
                         video_token_id=int(thinker_config.video_token_index),
@@ -989,9 +990,9 @@ class MRotaryEmbedding(RotaryEmbedding):
                         second_per_grid_ts=second_per_grid_ts,
                         audio_feature_lengths=audio_feature_lengths,
                         use_audio_in_video=use_audio_in_video,
-                    ))
+                    )
                 else:
-                    input_positions = torch.from_numpy(cls._vl_get_input_positions_numba(
+                    input_positions, mrope_position_delta = cls._vl_get_input_positions_numba(
                         input_tokens=input_tokens,
                         image_token_id=int(hf_config.image_token_id),
                         video_token_id=int(hf_config.video_token_id),
@@ -1000,70 +1001,61 @@ class MRotaryEmbedding(RotaryEmbedding):
                         image_grid_thw=image_grid_thw,
                         video_grid_thw=video_grid_thw,
                         second_per_grid_ts=second_per_grid_ts,
-                    ))
+                    )
+                
+                input_positions = torch.from_numpy(input_positions)
+                if context_len != 0 or seq_len is not None:
+                    input_positions = input_positions[:, context_len:seq_len]
             else:
-                if image_grid_thw is None:
-                    image_grid_thw = []
-                elif isinstance(image_grid_thw, torch.Tensor):
-                    image_grid_thw = image_grid_thw.tolist()
-
-                if video_grid_thw is None:
-                    video_grid_thw = []
-                elif isinstance(video_grid_thw, torch.Tensor):
-                    video_grid_thw = video_grid_thw.tolist()
-
-                if second_per_grid_ts is None:
-                    second_per_grid_ts = []
-
                 if isinstance(input_tokens, np.ndarray):
-                    input_tokens = torch.from_numpy(input_tokens)
+                    input_tokens = input_tokens.tolist()
 
                 if is_omni:
-                    input_positions = cls._omni_get_input_positions_torch(
+                    input_positions, mrope_position_delta = cls._omni_get_input_positions_torch(
                         input_tokens=input_tokens,
                         hf_config=hf_config,
                         image_grid_thw=image_grid_thw,
                         video_grid_thw=video_grid_thw,
                         second_per_grid_ts=second_per_grid_ts,
+                        context_len=context_len,
+                        seq_len=seq_len,
                         audio_feature_lengths=audio_feature_lengths,
                         use_audio_in_video=use_audio_in_video,
                     )
                 else:
-                    input_positions = cls._vl_get_input_positions_torch(
+                    input_positions, mrope_position_delta = cls._vl_get_input_positions_torch(
                         input_tokens=input_tokens,
                         hf_config=hf_config,
                         image_grid_thw=image_grid_thw,
                         video_grid_thw=video_grid_thw,
                         second_per_grid_ts=second_per_grid_ts,
+                        context_len=context_len,
+                        seq_len=seq_len,
                     )
-
-        mrope_position_delta = input_positions[:, -1].max().item() + 1 - len(input_tokens)
-        if context_len != 0 or seq_len is not None:
-            input_positions = input_positions[:, context_len:seq_len]
 
         return input_positions, mrope_position_delta
 
-    @staticmethod
+    @classmethod
     def _vl_get_input_positions_torch(
-        input_tokens: Union[list[int], torch.Tensor],
+        cls,
+        input_tokens: list[int],
         hf_config: PretrainedConfig,
-        image_grid_thw: list[list[int]],
-        video_grid_thw: list[list[int]],
+        image_grid_thw: Union[list[list[int]], torch.Tensor],
+        video_grid_thw: Union[list[list[int]], torch.Tensor],
         second_per_grid_ts: list[float],
-    ) -> torch.Tensor:
+        context_len: int = 0,
+        seq_len: Optional[int] = None,
+    ) -> Tuple[torch.Tensor, int]:
         """Get mrope input positions and delta value."""
-        vision_start_token_id = hf_config.vision_start_token_id
+
         image_token_id = hf_config.image_token_id
         video_token_id = hf_config.video_token_id
+        vision_start_token_id = hf_config.vision_start_token_id
         spatial_merge_size = hf_config.vision_config.spatial_merge_size
-        tokens_per_second = getattr(hf_config.vision_config, "tokens_per_second", 1.0)
+        tokens_per_second = getattr(hf_config.vision_config,
+                                    "tokens_per_second", 1.0)
 
-        if isinstance(input_tokens, torch.Tensor):
-            input_tokens_tensor = input_tokens
-            input_tokens = input_tokens.tolist()
-        else:
-            input_tokens_tensor = torch.tensor(input_tokens, dtype=torch.int64)
-
+        input_tokens_tensor = torch.tensor(input_tokens)
         vision_start_indices = torch.argwhere(
             input_tokens_tensor == vision_start_token_id).squeeze(1)
         vision_tokens = input_tokens_tensor[vision_start_indices + 1]
@@ -1136,7 +1128,12 @@ class MRotaryEmbedding(RotaryEmbedding):
                 torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx)
 
         llm_positions = torch.cat(llm_pos_ids_list, dim=1).reshape(3, -1)
-        return llm_positions
+        mrope_position_delta = (llm_positions.max() + 1 -
+                                len(input_tokens)).item()
+        if context_len != 0 or seq_len is not None:
+            llm_positions = llm_positions[:, context_len:seq_len]
+
+        return llm_positions, mrope_position_delta
     
     @staticmethod
     @jit(nopython=True)
@@ -1149,7 +1146,7 @@ class MRotaryEmbedding(RotaryEmbedding):
         image_grid_thw: np.ndarray,
         video_grid_thw: np.ndarray,
         second_per_grid_ts: np.ndarray,
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, int]:
         num_input_tokens = len(input_tokens)
         mrope_pos = np.empty((3, num_input_tokens), dtype=np.int64)
 
@@ -1207,16 +1204,22 @@ class MRotaryEmbedding(RotaryEmbedding):
                 mrope_pos[2, i] = cur_t
                 i += 1
 
-        return mrope_pos
+        mrope_position_delta = max(
+            mrope_pos[0, -1],
+            mrope_pos[1, -1],
+            mrope_pos[2, -1],
+        ) + 1 - num_input_tokens
+
+        return mrope_pos, mrope_position_delta
     
     @classmethod
     def _omni_get_input_positions_torch(
         cls,
-        input_tokens: List[int],
+        input_tokens: list[int],
         hf_config: PretrainedConfig,
-        image_grid_thw: Union[List[List[int]], torch.Tensor],
-        video_grid_thw: Union[List[List[int]], torch.Tensor],
-        second_per_grid_ts: Optional[List[float]] = None,
+        image_grid_thw: Union[list[list[int]], torch.Tensor],
+        video_grid_thw: Union[list[list[int]], torch.Tensor],
+        second_per_grid_ts: Optional[list[float]] = None,
         context_len: int = 0,
         seq_len: Optional[int] = None,
         audio_feature_lengths: Optional[torch.Tensor] = None,
@@ -1393,7 +1396,8 @@ class MRotaryEmbedding(RotaryEmbedding):
         llm_positions = torch.cat(llm_pos_ids_list, dim=1)
         mrope_position_delta = torch.cat(llm_pos_ids_list,
                                          dim=1).max() + 1 - len(src_item)
-        llm_positions = llm_positions[:, context_len:seq_len]
+        if context_len != 0 or seq_len is not None:
+            llm_positions = llm_positions[:, context_len:seq_len]
 
         return llm_positions, mrope_position_delta
 
@@ -1447,7 +1451,7 @@ class MRotaryEmbedding(RotaryEmbedding):
         second_per_grid_ts: np.ndarray,
         audio_feature_lengths: np.ndarray,
         use_audio_in_video: bool,
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, int]:
         num_input_tokens = len(input_tokens)
         mrope_pos = np.empty((3, num_input_tokens), dtype=np.int64)
 
@@ -1456,7 +1460,6 @@ class MRotaryEmbedding(RotaryEmbedding):
         cur_image_idx = -1
         cur_video_idx = -1
         cur_audio_idx = -1
-        cur_audio_temporal = -1
 
         num_images = len(image_grid_thw)
         num_videos = len(video_grid_thw)
@@ -1514,10 +1517,10 @@ class MRotaryEmbedding(RotaryEmbedding):
                         in_chunk_token_counter = 0
                         chunked_audio_token_num = min(t_ntoken_per_chunk, audio_token_num - added_audio_token_num)
                         for _ in range(chunked_audio_token_num):
-                            cur_audio_temporal += 1
-                            mrope_pos[0, i] = cur_audio_temporal
-                            mrope_pos[1, i] = cur_audio_temporal
-                            mrope_pos[2, i] = cur_audio_temporal
+                            cur_t += 1
+                            mrope_pos[0, i] = cur_t
+                            mrope_pos[1, i] = cur_t
+                            mrope_pos[2, i] = cur_t
                             i += 1
                             if i >= num_input_tokens:
                                 return mrope_pos
@@ -1526,10 +1529,10 @@ class MRotaryEmbedding(RotaryEmbedding):
                 # add remaining audio tokens
                 if added_audio_token_num < audio_token_num:
                     for _ in range(audio_token_num - added_audio_token_num):
-                        cur_audio_temporal += 1
-                        mrope_pos[0, i] = cur_audio_temporal
-                        mrope_pos[1, i] = cur_audio_temporal
-                        mrope_pos[2, i] = cur_audio_temporal
+                        cur_t += 1
+                        mrope_pos[0, i] = cur_t
+                        mrope_pos[1, i] = cur_t
+                        mrope_pos[2, i] = cur_t
                         i += 1
                         if i >= num_input_tokens:
                             return mrope_pos
@@ -1554,37 +1557,37 @@ class MRotaryEmbedding(RotaryEmbedding):
                                 return mrope_pos
                 
                 cur_t = max(mrope_pos[0, i - 1], mrope_pos[1, i - 1], mrope_pos[2, i - 1])
-            elif token_id == audio_start_token_id \
-                and i > 0 \
-                and input_tokens[i - 1] == vision_start_token_id \
-                and use_audio_in_video:
-                # handling the <|audio_start|> after <|vision_start|>
-                mrope_pos[0, i] = cur_t
-                mrope_pos[1, i] = cur_t
-                mrope_pos[2, i] = cur_t
-                i += 1
-            elif token_id == vision_end_token_id \
-                and i > 0 \
-                and input_tokens[i - 1] == audio_end_token_id \
-                and use_audio_in_video:
-                # handling the <|vision_end|> after <|audio_end|>
-                mrope_pos[0, i] = cur_t
-                mrope_pos[1, i] = cur_t
-                mrope_pos[2, i] = cur_t
-                i += 1
             elif token_id == audio_token_id:
                 cur_audio_idx += 1
                 assert cur_audio_idx < num_audios, "mrope audio_feature_lengths index out of range"
 
                 audio_token_num = (((audio_feature_lengths[cur_audio_idx] - 1) // 2 + 1 - 2) // 2 + 1)
                 for _ in range(audio_token_num):
-                    cur_audio_temporal += 1
-                    mrope_pos[0, i] = cur_audio_temporal
-                    mrope_pos[1, i] = cur_audio_temporal
-                    mrope_pos[2, i] = cur_audio_temporal
+                    cur_t += 1
+                    mrope_pos[0, i] = cur_t
+                    mrope_pos[1, i] = cur_t
+                    mrope_pos[2, i] = cur_t
                     i += 1
                     if i >= num_input_tokens:
                         return mrope_pos
+            elif token_id == audio_start_token_id \
+                and use_audio_in_video \
+                and i > 0 \
+                and input_tokens[i - 1] == vision_start_token_id:
+                # handling the <|audio_start|> after <|vision_start|>
+                mrope_pos[0, i] = cur_t
+                mrope_pos[1, i] = cur_t
+                mrope_pos[2, i] = cur_t
+                i += 1
+            elif token_id == vision_end_token_id \
+                and use_audio_in_video \
+                and i > 0 \
+                and input_tokens[i - 1] == audio_end_token_id:
+                # handling the <|vision_end|> after <|audio_end|>
+                mrope_pos[0, i] = cur_t
+                mrope_pos[1, i] = cur_t
+                mrope_pos[2, i] = cur_t
+                i += 1
             else:
                 cur_t += 1
                 mrope_pos[0, i] = cur_t
@@ -1592,7 +1595,13 @@ class MRotaryEmbedding(RotaryEmbedding):
                 mrope_pos[2, i] = cur_t
                 i += 1
 
-        return mrope_pos
+        mrope_position_delta = max(
+            mrope_pos[0, -1],
+            mrope_pos[1, -1],
+            mrope_pos[2, -1],
+        ) + 1 - num_input_tokens
+
+        return mrope_pos, mrope_position_delta
     
     @staticmethod
     def get_next_input_positions(
