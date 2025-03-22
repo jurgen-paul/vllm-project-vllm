@@ -684,7 +684,7 @@ class Qwen2_5_VisionTransformer(nn.Module):
 
         NOTE:
         - instead of returning tuple[window_indices, cu_window_seqlens],
-            it returns tuple[window_indices, window_seqlens, reverse_indices]
+            it returns tuple[window_indices, reverse_indices, window_seqlens, cu_window_seqlens]
         - it prevents zero in `window_seqlens`, so there is no need to call 
             `torch.unique_consecutive` on cumsum of window_seqlens
         """
@@ -711,6 +711,8 @@ class Qwen2_5_VisionTransformer(nn.Module):
         window_indices = np.empty(total_cell_count, dtype=np.int64)
         reverse_indices = np.empty(total_cell_count, dtype=np.int64)
         window_seqlens = np.empty(total_window_count, dtype=np.int64)
+        cu_window_seqlens = np.empty(1 + total_window_count, dtype=np.int64)
+        cu_window_seqlens[0] = 0
 
         # second pass: fill arrays
         current_index_offset = 0
@@ -752,12 +754,14 @@ class Qwen2_5_VisionTransformer(nn.Module):
                                 cell_counter += 1
 
                         window_index_ptr += cell_counter
-                        window_seqlens[seqlen_ptr] = cell_counter * spatial_merge_unit
+                        cur_seqlen = cell_counter * spatial_merge_unit
+                        window_seqlens[seqlen_ptr] = cur_seqlen
+                        cu_window_seqlens[seqlen_ptr + 1] = cu_window_seqlens[seqlen_ptr] + cur_seqlen
                         seqlen_ptr += 1
 
             current_index_offset += temporal * merged_height * merged_width
 
-        return window_indices, window_seqlens, reverse_indices
+        return window_indices, reverse_indices, window_seqlens, cu_window_seqlens
 
     def compute_attn_mask_seqlen(
         self, seqlens: torch.Tensor
@@ -796,28 +800,34 @@ class Qwen2_5_VisionTransformer(nn.Module):
         # full attention parameters
         seqlens_full = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
                                                grid_thw[:, 0])
-        cu_seqlens_full = self.compute_cu_seqlens(seqlens_full).to(
+        cu_seqlens_full = seqlens_full.cumsum(
+            dim=0,
+            dtype=torch.int64 if torch.jit.is_tracing() else torch.int32,
+        )
+        cu_seqlens_full = F.pad(cu_seqlens_full, (1, 0), "constant", 0).to(
             device=self.device,
             non_blocking=True,
         )
 
         # window attention parameters
-        window_indices, window_seqlens, reverse_indices = self.get_window_index_numba(
+        window_indices, reverse_indices, window_seqlens, cu_seqlens_window = self.get_window_index_numba(
             grid_thw=grid_thw.numpy(),
             window_size=self.window_size,
             spatial_merge_size=self.spatial_merge_size,
             patch_size=self.patch_size,
         )
+        if not torch.jit.is_tracing():
+            cu_seqlens_window = cu_seqlens_window.astype(np.int32)
         
         window_indices = torch.from_numpy(window_indices).to(
             device=self.device,
             non_blocking=True,
         )
-        cu_seqlens_window = self.compute_cu_seqlens(window_seqlens).to(
+        reverse_indices = torch.from_numpy(reverse_indices).to(
             device=self.device,
             non_blocking=True,
         )
-        reverse_indices = torch.from_numpy(reverse_indices).to(
+        cu_seqlens_window = torch.from_numpy(cu_seqlens_window).to(
             device=self.device,
             non_blocking=True,
         )
