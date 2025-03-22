@@ -757,7 +757,7 @@ class Qwen2_5_VisionTransformer(nn.Module):
 
             current_index_offset += temporal * merged_height * merged_width
 
-        return window_indices, window_seqlens
+        return window_indices, window_seqlens, reverse_indices
 
     def compute_attn_mask_seqlen(
         self, seqlens: torch.Tensor

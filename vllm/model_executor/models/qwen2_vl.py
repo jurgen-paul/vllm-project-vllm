@@ -634,7 +634,10 @@ class Qwen2VisionTransformer(nn.Module):
     
     @staticmethod
     @jit(nopython=True)
-    def compute_rot_pos_numba(grid_thw, spatial_merge_size):
+    def compute_rot_pos_numba(
+        grid_thw: np.ndarray,
+        spatial_merge_size: int,
+    ) -> np.ndarray:
         """
         numba optimized version of compute_rot_pos_torch
         """
