@@ -695,12 +695,12 @@ class Qwen2_5_VisionTransformer(nn.Module):
             temporal = grid_thw[i, 0]
 
             merged_height = grid_thw[i, 1] // spatial_merge_size
-            merged_width  = grid_thw[i, 2]  // spatial_merge_size
+            merged_width = grid_thw[i, 2] // spatial_merge_size
 
             total_cell_count += temporal * merged_height * merged_width
 
             num_blocks_height = cdiv(merged_height, vit_merger_window_size)
-            num_blocks_width  = cdiv(merged_width, vit_merger_window_size)
+            num_blocks_width = cdiv(merged_width, vit_merger_window_size)
 
             total_window_count += temporal * num_blocks_height * num_blocks_width
 
@@ -713,11 +713,11 @@ class Qwen2_5_VisionTransformer(nn.Module):
         seqlen_ptr = 0
         for i in range(grid_thw.shape[0]):
             temporal = grid_thw[i, 0]
-            height   = grid_thw[i, 1]
-            width    = grid_thw[i, 2]
+            height = grid_thw[i, 1]
+            width = grid_thw[i, 2]
 
             merged_height = height // spatial_merge_size
-            merged_width  = width  // spatial_merge_size
+            merged_width = width // spatial_merge_size
 
             num_blocks_height = cdiv(merged_height, vit_merger_window_size)
             num_blocks_width  = cdiv(merged_width, vit_merger_window_size)
@@ -754,15 +754,14 @@ class Qwen2_5_VisionTransformer(nn.Module):
         return window_index, window_seqlens
 
     def compute_attn_mask_seqlen(
-        self,
-        cu_seqlens: torch.Tensor,
+        self, seqlens: torch.Tensor
     ) -> tuple[Optional[int], Optional[list[int]]]:
-        max_seqlen, seqlens = None, None
+        max_seqlen, seqlens_list = None, None
         if self.attn_backend == _Backend.FLASH_ATTN:
-            max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+            max_seqlen = seqlens.max().item()
         elif self.attn_backend == _Backend.XFORMERS:
-            seqlens = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
-        return max_seqlen, seqlens
+            seqlens_list = seqlens.tolist()
+        return max_seqlen, seqlens_list
     
     @staticmethod
     def compute_cu_seqlens(seqlens: torch.Tensor) -> torch.Tensor:
