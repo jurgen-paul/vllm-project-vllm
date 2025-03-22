@@ -1855,6 +1855,7 @@ class SpeculativeConfig:
         speculative_model: Optional[str],
         speculative_model_quantization: Optional[str],
         speculative_draft_tensor_parallel_size: Optional[int],
+        speculative_draft_pipeline_parallel_size: Optional[int],
         num_speculative_tokens: Optional[int],
         speculative_disable_mqa_scorer: Optional[bool],
         speculative_max_model_len: Optional[int],
@@ -1887,6 +1888,8 @@ class SpeculativeConfig:
                 None, we assume the model weights are not quantized.
             speculative_draft_tensor_parallel_size (Optional[int]): The degree
                 of the tensor parallelism for the draft model.
+            speculative_draft_pipeline_parallel_size (Optional[int]): The degree
+                of the pipeline parallelism for the draft model.
             num_speculative_tokens (Optional[int]): The number of speculative
                 tokens, if provided. Will default to the number in the draft
                 model config if present, otherwise is required.
@@ -2029,6 +2032,12 @@ class SpeculativeConfig:
                     speculative_draft_tensor_parallel_size,
                     draft_hf_config
             )
+            speculative_draft_pipeline_parallel_size = \
+                SpeculativeConfig._verify_and_get_draft_model_pipeline_parallel_size(
+                    target_parallel_config,
+                    speculative_draft_pipeline_parallel_size,
+                    draft_hf_config
+            )
 
             draft_model_config.max_model_len = (
                 SpeculativeConfig._maybe_override_draft_max_model_len(
@@ -2040,7 +2049,8 @@ class SpeculativeConfig:
             draft_parallel_config = (
                 SpeculativeConfig.create_draft_parallel_config(
                     target_parallel_config,
-                    speculative_draft_tensor_parallel_size, draft_hf_config))
+                    speculative_draft_tensor_parallel_size,
+                    speculative_draft_pipeline_parallel_size, draft_hf_config))
 
         if num_speculative_tokens is None:
             raise ValueError(
@@ -2137,9 +2147,31 @@ class SpeculativeConfig:
         return speculative_draft_tensor_parallel_size
 
     @staticmethod
+    def _verify_and_get_draft_model_pipeline_parallel_size(
+            target_parallel_config: ParallelConfig,
+            speculative_draft_pipeline_parallel_size: Optional[int],
+            draft_hf_config: PretrainedConfig) -> int:
+        """
+        Verifies and adjusts the tensor parallel size for a draft model
+        specified using speculative_draft_pipeline_parallel_size.
+        """
+        # If speculative_draft_pipeline_parallel_size is unset then set it
+        # appropriately else verify that it is set correctly.
+        if speculative_draft_pipeline_parallel_size is None:
+            speculative_draft_pipeline_parallel_size = \
+                target_parallel_config.pipeline_parallel_size
+        elif speculative_draft_pipeline_parallel_size not in (
+                1, target_parallel_config.pipeline_parallel_size):
+            raise ValueError(
+                f"{speculative_draft_pipeline_parallel_size=} cannot be "
+                f"other value than 1 or target model pipeline_parallel_size")
+        return speculative_draft_pipeline_parallel_size
+
+    @staticmethod
     def create_draft_parallel_config(
         target_parallel_config: ParallelConfig,
         speculative_draft_tensor_parallel_size: int,
+        speculative_draft_pipeline_parallel_size: int,
         draft_hf_config: PretrainedConfig,
     ) -> ParallelConfig:
         """Create a parallel config for use by the draft worker.
@@ -2147,8 +2179,7 @@ class SpeculativeConfig:
         This is mostly a copy of the target parallel config, except the tp_size.
         """
         draft_parallel_config = ParallelConfig(
-            pipeline_parallel_size=target_parallel_config.
-            pipeline_parallel_size,
+            pipeline_parallel_size=speculative_draft_pipeline_parallel_size,
             tensor_parallel_size=speculative_draft_tensor_parallel_size,
             distributed_executor_backend=target_parallel_config.
             distributed_executor_backend,
