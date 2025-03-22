@@ -36,13 +36,15 @@ class Scheduler(SchedulerInterface):
         cache_config: CacheConfig,
         lora_config: Optional[LoRAConfig],
         speculative_config: Optional[SpeculativeConfig],
-        log_stats: bool,
         structured_output_manager: StructuredOutputManager,
+        include_finished_set: bool = False,
+        log_stats: bool = False,
     ) -> None:
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.lora_config = lora_config
         self.speculative_config = speculative_config
+        self.include_finished_set = include_finished_set
         self.log_stats = log_stats
         self.structured_output_manager = structured_output_manager
 
@@ -645,10 +647,16 @@ class Scheduler(SchedulerInterface):
                 new_running.append(request)
 
         self.running = new_running
-        return EngineCoreOutputs(
+        engine_core_outputs = EngineCoreOutputs(
             outputs=outputs,
             scheduler_stats=self.make_stats(),
         )
+        if self.include_finished_set:
+            #TODO currently sending duplicates here, improve this
+            engine_core_outputs.finished_requests = (
+                scheduler_output.finished_req_ids | self.finished_req_ids)
+
+        return engine_core_outputs
 
     def add_request(self, request: Request) -> None:
         self.waiting.append(request)

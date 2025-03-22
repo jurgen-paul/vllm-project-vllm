@@ -4,6 +4,7 @@
 # we need to have a launcher to create multiple data parallel
 # ranks. And each rank will create a vLLM instance to process its own prompts.
 import os
+from time import sleep
 
 from vllm import LLM, SamplingParams
 from vllm.utils import get_open_port
@@ -17,10 +18,9 @@ def main(dp_size, dp_rank, dp_master_ip, dp_master_port, GPUs_per_dp_rank):
     os.environ["VLLM_DP_SIZE"] = str(dp_size)
     os.environ["VLLM_DP_MASTER_IP"] = dp_master_ip
     os.environ["VLLM_DP_MASTER_PORT"] = str(dp_master_port)
-    # set devices for each dp_rank
-    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(
-        str(i) for i in range(dp_rank * GPUs_per_dp_rank, (dp_rank + 1) *
-                              GPUs_per_dp_rank))
+
+    # CUDA_VISIBLE_DEVICES for each DP rank is set automatically inside the
+    # engine processes.
 
     # Sample prompts.
     prompts = [
@@ -64,6 +64,9 @@ def main(dp_size, dp_rank, dp_master_ip, dp_master_port, GPUs_per_dp_rank):
         print(f"DP rank {dp_rank}, Prompt: {prompt!r}, "
               f"Generated text: {generated_text!r}")
 
+    # Give engines time to pause their processing loops before exiting.
+    sleep(1)
+
 
 if __name__ == "__main__":
     from multiprocessing import Process
@@ -78,8 +81,13 @@ if __name__ == "__main__":
         procs.append(proc)
     exit_code = 0
     for proc in procs:
-        proc.join()
-        if proc.exitcode:
+        proc.join(timeout=300)
+        if proc.exitcode is None:
+            print(f"Killing process {proc.pid} that "
+                  f"didn't stop within 5 minutes.")
+            proc.kill()
+            exit_code = 1
+        elif proc.exitcode:
             exit_code = proc.exitcode
 
     exit(exit_code)
