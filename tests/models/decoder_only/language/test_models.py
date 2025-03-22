@@ -3,7 +3,10 @@
 
 Run `pytest tests/models/test_models.py`.
 """
+
 import pytest
+
+from tests.utils import maybe_test_rocm_aiter
 
 from ...utils import check_logprobs_close
 
@@ -69,18 +72,9 @@ REQUIRES_V0 = ["microsoft/phi-2", "stabilityai/stablelm-3b-4e1t"]
 @pytest.mark.parametrize("dtype", ["half"])
 @pytest.mark.parametrize("max_tokens", [32])
 @pytest.mark.parametrize("num_logprobs", [5])
-def test_models(
-    hf_runner,
-    vllm_runner,
-    example_prompts,
-    model: str,
-    dtype: str,
-    max_tokens: int,
-    num_logprobs: int,
-    monkeypatch,
-) -> None:
-    if model in REQUIRES_V0:
-        monkeypatch.setenv("VLLM_USE_V1", "0")
+@maybe_test_rocm_aiter
+def test_models(hf_runner, vllm_runner, example_prompts, model: str,
+                dtype: str, max_tokens: int, num_logprobs: int) -> None:
 
     with hf_runner(model, dtype=dtype) as hf_model:
         if model.startswith("THUDM/chatglm3"):

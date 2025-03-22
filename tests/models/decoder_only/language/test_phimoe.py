@@ -8,7 +8,7 @@ import torch
 
 from vllm.platforms import current_platform
 
-from ....utils import large_gpu_test
+from ....utils import large_gpu_test, maybe_test_rocm_aiter
 from ...utils import check_logprobs_close
 
 MODELS = [
@@ -79,15 +79,9 @@ def test_phimoe_routing_function():
 @pytest.mark.parametrize("dtype", ["bfloat16"])
 @pytest.mark.parametrize("max_tokens", [64])
 @pytest.mark.parametrize("num_logprobs", [5])
-def test_models(
-    hf_runner,
-    vllm_runner,
-    example_prompts,
-    model: str,
-    dtype: str,
-    max_tokens: int,
-    num_logprobs: int,
-) -> None:
+@maybe_test_rocm_aiter
+def test_models(hf_runner, vllm_runner, example_prompts, model: str,
+                dtype: str, max_tokens: int, num_logprobs: int) -> None:
     with hf_runner(model, dtype=dtype) as hf_model:
         hf_outputs = hf_model.generate_greedy_logprobs_limit(
             example_prompts, max_tokens, num_logprobs)
