@@ -14,6 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from functools import cached_property
 from typing import Any, List, Literal, Optional, Set, Tuple, TypedDict, Union
@@ -386,6 +387,29 @@ class Phi3VDummyInputsBuilder(BaseDummyInputsBuilder[Phi3VProcessingInfo]):
 
 class Phi3VMultiModalProcessor(BaseMultiModalProcessor[Phi3VProcessingInfo]):
 
+    # https://huggingface.co/TIGER-Lab/VLM2Vec-Full/blob/897742d/processing_phi3_v.py#L435
+    def _apply_hf_processor_text_only(self, prompt_text: str) -> list[int]:
+        tokenizer = self.info.get_tokenizer()
+
+        pattern = r"<\|image_\d+\|>"
+        prompt_chunks = [
+            tokenizer(chunk).input_ids
+            for chunk in re.split(pattern, prompt_text)
+        ]
+        image_tags = [
+            tokenizer.encode(tag, add_special_tokens=False)
+            for tag in re.findall(pattern, prompt_text)
+        ]
+
+        if len(prompt_chunks) > len(image_tags):
+            image_tags.append([])
+        prompt_ids = [
+            tid for sublist in zip(prompt_chunks, image_tags)
+            for ele in sublist for tid in ele
+        ]
+
+        return prompt_ids
+
     def _call_hf_processor(
         self,
         prompt: str,
@@ -428,10 +452,6 @@ class Phi3VMultiModalProcessor(BaseMultiModalProcessor[Phi3VProcessingInfo]):
         hf_processor = self.info.get_hf_processor(**hf_processor_mm_kwargs)
         image_tokens: list[str] = hf_processor.img_tokens  # type: ignore
 
-        tokenizer = self.info.get_tokenizer()
-        bos_token_id = tokenizer.bos_token_id
-        assert isinstance(bos_token_id, int)
-
         def get_replacement_phi3v(item_idx: int):
             images = mm_items.get_items(
                 "image", (ImageEmbeddingItems, ImageProcessorItems))
@@ -449,7 +469,7 @@ class Phi3VMultiModalProcessor(BaseMultiModalProcessor[Phi3VProcessingInfo]):
             image_tokens = [_IMAGE_TOKEN_ID] * num_image_tokens
 
             return PromptUpdateDetails(
-                full=image_tokens + [bos_token_id],
+                full=image_tokens,
                 features=image_tokens,
             )
 

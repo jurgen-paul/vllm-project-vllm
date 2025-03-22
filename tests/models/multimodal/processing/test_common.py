@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
+import re
 from functools import partial
 from typing import Optional, Union
 
@@ -153,6 +154,21 @@ def _test_processing_correctness_hf(
         # incorrect token ids. So we need use `add_special_tokens=False` here
         # to leave bos_token to be added by the processor.
         token_prompt = tokenizer.encode(prompt, add_special_tokens=False)
+    elif model_config.hf_config.model_type == "phi3_v":
+        pattern = r"<\|image_\d+\|>"
+        prompt_chunks = [
+            tokenizer(chunk).input_ids for chunk in re.split(pattern, prompt)
+        ]
+        image_tags = [
+            tokenizer.encode(tag, add_special_tokens=False)
+            for tag in re.findall(pattern, prompt)
+        ]
+        if len(prompt_chunks) > len(image_tags):
+            image_tags.append([])
+        token_prompt = [
+            tid for sublist in zip(prompt_chunks, image_tags)
+            for ele in sublist for tid in ele
+        ]
     else:
         token_prompt = tokenizer.encode(prompt)
 
