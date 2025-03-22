@@ -594,7 +594,19 @@ class Qwen2VisionTransformer(nn.Module):
     def device(self) -> torch.device:
         return self.patch_embed.proj.weight.device
     
-    def _calc_rot_pos_torch(self, grid_thw: torch.Tensor) -> torch.Tensor:
+    @staticmethod
+    def compute_cu_seqlens(seqlens: torch.Tensor) -> torch.Tensor:
+        return F.pad(
+            seqlens.cumsum(
+                dim=0,
+                dtype=torch.int64 if torch.jit.is_tracing() else torch.int32,
+            ),
+            (1, 0),
+            "constant",
+            0,
+        )
+    
+    def compute_rot_pos_torch(self, grid_thw: torch.Tensor) -> torch.Tensor:
         pos_ids = []
         for t, h, w in grid_thw:
             hpos_ids = torch.arange(h).unsqueeze(1).expand(-1, w)
@@ -622,18 +634,22 @@ class Qwen2VisionTransformer(nn.Module):
     
     @staticmethod
     @jit(nopython=True)
-    def _calc_rot_pos_numba(grid_thw, spatial_merge_size):
+    def compute_rot_pos_numba(grid_thw, spatial_merge_size):
+        """
+        numba optimized version of compute_rot_pos_torch
+        """
         l = 0
         for i in range(len(grid_thw)):
-            l += grid_thw[i][0] * grid_thw[i][1] * grid_thw[i][2]
+            l += grid_thw[i, 0] * grid_thw[i, 1] * grid_thw[i, 2]
         
         arr = np.empty((l, 2), dtype=np.int64)
         pos = 0
         if spatial_merge_size == 2:
+            # further optimized for spatial_merge_size == 2
             for i in range(len(grid_thw)):
-                for _ in range(grid_thw[i][0]):
-                    for h in range(0, grid_thw[i][1], 2):
-                        for w in range(0, grid_thw[i][2], 2):
+                for _ in range(grid_thw[i, 0]):
+                    for h in range(0, grid_thw[i, 1], 2):
+                        for w in range(0, grid_thw[i, 2], 2):
                             arr[pos, 0] = h
                             arr[pos, 1] = w
                             pos += 1
@@ -648,9 +664,9 @@ class Qwen2VisionTransformer(nn.Module):
                             pos += 1
         else:
             for i in range(len(grid_thw)):
-                for _ in range(grid_thw[i][0]):
-                    for h in range(0, grid_thw[i][1], spatial_merge_size):
-                        for w in range(0, grid_thw[i][2], spatial_merge_size):
+                for _ in range(grid_thw[i, 0]):
+                    for h in range(0, grid_thw[i, 1], spatial_merge_size):
+                        for w in range(0, grid_thw[i, 2], spatial_merge_size):
                             for m_x in range(spatial_merge_size):
                                 for m_y in range(spatial_merge_size):
                                     arr[pos, 0] = h + m_x
@@ -660,7 +676,7 @@ class Qwen2VisionTransformer(nn.Module):
     
     def rot_pos_emb(self, grid_thw: torch.Tensor) -> torch.Tensor:
         pos_ids = torch.from_numpy(
-            self._calc_rot_pos_numba(
+            self.compute_rot_pos_numba(
                 grid_thw.numpy(),
                 self.spatial_merge_size,
             )
@@ -702,7 +718,10 @@ class Qwen2VisionTransformer(nn.Module):
         # compute cu_seqlens
         seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
                                           grid_thw[:, 0])
-        cu_seqlens = F.pad(seqlens.cumsum(dim=0, dtype=torch.int32), (1, 0), "constant", 0)
+        cu_seqlens = self.compute_cu_seqlens(seqlens).to(
+            device=self.device,
+            non_blocking=True,
+        )
 
         # transformers
         x = x.unsqueeze(1)
