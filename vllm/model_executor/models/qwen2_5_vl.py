@@ -682,10 +682,13 @@ class Qwen2_5_VisionTransformer(nn.Module):
         """
         numba optimized version of get_window_index_torch
 
-        NOTE: instead of returning `cu_window_seqlens`, it returns `window_seqlens`
+        NOTE:
+        - instead of returning `cu_window_seqlens`, it returns `window_seqlens`
+        - it prevents zero seqlen, so no need to call 
+            `torch.unique_consecutive` any more
         """
         spatial_merge_unit = spatial_merge_size * spatial_merge_size
-        vit_merger_window_size = (window_size // spatial_merge_size) // patch_size
+        vit_merger_window_size = window_size // spatial_merge_size // patch_size
 
         total_cell_count = 0
         total_window_count = 0
