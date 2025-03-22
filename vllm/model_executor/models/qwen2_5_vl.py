@@ -711,7 +711,7 @@ class Qwen2_5_VisionTransformer(nn.Module):
         window_indices = np.empty(total_cell_count, dtype=np.int64)
         reverse_indices = np.empty(total_cell_count, dtype=np.int64)
         window_seqlens = np.empty(total_window_count, dtype=np.int64)
-        cu_window_seqlens = np.empty(1 + total_window_count, dtype=np.int64)
+        cu_window_seqlens = np.empty(1 + total_window_count, dtype=np.int32)
         cu_window_seqlens[0] = 0
 
         # second pass: fill arrays
@@ -816,8 +816,8 @@ class Qwen2_5_VisionTransformer(nn.Module):
             spatial_merge_size=self.spatial_merge_size,
             patch_size=self.patch_size,
         )
-        if not torch.jit.is_tracing():
-            cu_seqlens_window = cu_seqlens_window.astype(np.int32)
+        if torch.jit.is_tracing():
+            cu_seqlens_window = cu_seqlens_window.astype(np.int64)
         
         window_indices = torch.from_numpy(window_indices).to(
             device=self.device,
