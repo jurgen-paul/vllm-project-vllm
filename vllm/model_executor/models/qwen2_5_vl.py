@@ -789,7 +789,7 @@ class Qwen2_5_VisionTransformer(nn.Module):
 
         # compute seqlens for full attention
         seqlens_full = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2],
-                                          grid_thw[:, 0])
+                                               grid_thw[:, 0])
         cu_seqlens_full = self.compute_cu_seqlens(seqlens_full).to(
             device=self.device,
             non_blocking=True,
