@@ -4,18 +4,13 @@ import itertools
 import warnings
 from collections.abc import Sequence
 from contextlib import contextmanager
-from typing import Any, Callable, ClassVar, Optional, Union, cast, overload
+from typing import Any, Callable, ClassVar, Optional, Union, cast, overload, TYPE_CHECKING
 
 import cloudpickle
 import torch.nn as nn
 from tqdm import tqdm
 from typing_extensions import TypeVar, deprecated
 
-from vllm.beam_search import (BeamSearchInstance, BeamSearchOutput,
-                              BeamSearchSequence, get_beam_search_score)
-from vllm.config import CompilationConfig
-from vllm.engine.arg_utils import (EngineArgs, HfOverrides, PoolerConfig,
-                                   TaskOption)
 from vllm.engine.llm_engine import LLMEngine
 from vllm.entrypoints.chat_utils import (ChatCompletionMessageParam,
                                          ChatTemplateContentFormatOption,
@@ -38,13 +33,19 @@ from vllm.pooling_params import PoolingParams
 from vllm.prompt_adapter.request import PromptAdapterRequest
 from vllm.sampling_params import (BeamSearchParams, GuidedDecodingParams,
                                   RequestOutputKind, SamplingParams)
-from vllm.transformers_utils.tokenizer import (AnyTokenizer, MistralTokenizer,
+from vllm.transformers_utils.tokenizer import (AnyTokenizer,
                                                get_cached_tokenizer)
 from vllm.transformers_utils.tokenizer_group import TokenizerGroup
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import (Counter, Device, deprecate_args, deprecate_kwargs,
                         is_list_of)
 
+from vllm.beam_search import (BeamSearchInstance, BeamSearchOutput,
+                              BeamSearchSequence, get_beam_search_score)
+
+if TYPE_CHECKING:
+    from vllm.engine.arg_utils import HfOverrides, PoolerConfig,TaskOption
+    
 logger = init_logger(__name__)
 
 _R = TypeVar("_R", default=Any)
@@ -177,11 +178,11 @@ class LLM:
         max_seq_len_to_capture: int = 8192,
         disable_custom_all_reduce: bool = False,
         disable_async_output_proc: bool = False,
-        hf_overrides: Optional[HfOverrides] = None,
+        hf_overrides: Optional['HfOverrides'] = None,
         mm_processor_kwargs: Optional[dict[str, Any]] = None,
         # After positional args are removed, move this right below `model`
-        task: TaskOption = "auto",
-        override_pooler_config: Optional[PoolerConfig] = None,
+        task: "TaskOption" = "auto",
+        override_pooler_config: Optional["PoolerConfig"] = None,
         compilation_config: Optional[Union[int, dict[str, Any]]] = None,
         **kwargs,
     ) -> None:
@@ -191,7 +192,8 @@ class LLM:
         Note: if enforce_eager is unset (enforce_eager is None)
         it defaults to False.
         '''
-
+        from vllm.engine.arg_utils import EngineArgs
+        
         if "disable_log_stats" not in kwargs:
             kwargs["disable_log_stats"] = True
 
@@ -204,6 +206,7 @@ class LLM:
 
         if compilation_config is not None:
             if isinstance(compilation_config, (int, dict)):
+                from vllm.config import CompilationConfig
                 compilation_config_instance = CompilationConfig.from_cli(
                     str(compilation_config))
             else:
@@ -708,7 +711,7 @@ class LLM:
             )
 
             prompt_data: Union[str, list[int]]
-            if isinstance(tokenizer, MistralTokenizer):
+            if isinstance(tokenizer, "MistralTokenizer"):
                 prompt_data = apply_mistral_chat_template(
                     tokenizer,
                     messages=msgs,
@@ -1041,7 +1044,7 @@ class LLM:
         prompt_adapter_request: Optional[PromptAdapterRequest] = None,
     ) -> list[ScoringRequestOutput]:
 
-        if isinstance(tokenizer, MistralTokenizer):
+        if isinstance(tokenizer, "MistralTokenizer"):
             raise ValueError(
                 "Score API is only enabled for `--task embed or score`")
 
