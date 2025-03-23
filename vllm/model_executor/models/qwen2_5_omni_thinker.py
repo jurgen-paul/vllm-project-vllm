@@ -21,6 +21,7 @@
 # limitations under the License.
 """Inference-only Qwen2.5-Omni model (thinker part)."""
 
+from copy import copy
 from functools import cached_property, partial
 from typing import (Any, Dict, Iterable, List, Mapping, Optional, Sequence,
                     Set, Tuple, Union)
@@ -37,6 +38,7 @@ from transformers.models.qwen2_5_omni.processing_qwen2_5_omni import (
 
 from vllm.config import VllmConfig
 from vllm.logger import init_logger
+from vllm.model_executor.layers.rotary_embedding import MRotaryEmbedding
 from vllm.model_executor.layers.sampler import SamplerOutput, get_sampler
 from vllm.model_executor.models.qwen2_5_vl import (
     Qwen2_5_VisionTransformer, Qwen2_5_VLImageEmbeddingInputs,
@@ -49,13 +51,16 @@ from vllm.model_executor.models.qwen2_audio import (
 from vllm.model_executor.models.qwen2_vl import Qwen2VLMultiModalDataParser
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.multimodal import MULTIMODAL_REGISTRY
+from vllm.multimodal.hasher import MultiModalHasher
 from vllm.multimodal.inputs import (ImageItem, ModalityData,
-                                    MultiModalFieldConfig, MultiModalKwargs,
+                                    MultiModalDataDict, MultiModalFieldConfig,
+                                    MultiModalInputs, MultiModalKwargs,
                                     NestedTensors)
 from vllm.multimodal.parse import (AudioProcessorItems, DictEmbeddingItems,
                                    ModalityDataItems, MultiModalDataItems,
                                    MultiModalDataParser)
 from vllm.multimodal.processing import (BaseMultiModalProcessor,
+                                        PlaceholderFeaturesInfo,
                                         PromptReplacement, PromptUpdate)
 from vllm.multimodal.profiling import BaseDummyInputsBuilder, ProcessorInputs
 from vllm.sequence import IntermediateTensors, SequenceData
@@ -333,6 +338,91 @@ class Qwen2_5OmniThinkerMultiModalProcessor(
     ) -> Mapping[str, MultiModalFieldConfig]:
         return _qwen2_5_omni_thinker_field_config(hf_inputs)
 
+    def apply(
+        self,
+        prompt: Union[str, list[int]],
+        mm_data: MultiModalDataDict,
+        hf_processor_mm_kwargs: Mapping[str, object],
+        return_mm_hashes: bool = False,
+    ) -> MultiModalInputs:
+        """
+        Qwen2.5-Omni reimplements this function to handle `use_audio_in_video`.
+        """
+        mm_items = self._to_mm_items(mm_data)
+
+        # Create MM hashes to be returned (only used in V1)
+        # TODO: Use these hash keys for caching operations in apply_hf_processor
+        # instead of rehashing.
+
+        if return_mm_hashes:
+            model_id = self.info.model_id
+            mm_hashes = {
+                modality: [
+                    MultiModalHasher.hash_kwargs(model_id=model_id,
+                                                 **{modality: item},
+                                                 **hf_processor_mm_kwargs)
+                    for item in items
+                ]
+                for modality, items in mm_items.items()
+            }
+        else:
+            mm_hashes = None
+
+        (
+            prompt_ids,
+            mm_kwargs,
+            _,
+        ) = self._cached_apply_hf_processor(
+            prompt,
+            mm_items,
+            hf_processor_mm_kwargs,
+        )
+
+        unbound_prompt_updates = self._get_prompt_updates(
+            mm_items,
+            hf_processor_mm_kwargs,
+            mm_kwargs,
+        )
+        mm_prompt_updates = self._bind_and_group_updates(
+            unbound_prompt_updates)
+
+        mm_item_counts = mm_items.get_all_counts()
+        self._validate_mm_kwargs(mm_kwargs, mm_item_counts)
+
+        use_audio_in_video = hf_processor_mm_kwargs.get(
+            "use_audio_in_video", False)
+
+        # Qwen2.5-Omni processor never applies any updates.
+        (
+            prompt_ids,
+            prompt,
+            mm_placeholders,
+        ) = self._apply_prompt_updates(
+            prompt_ids,
+            mm_prompt_updates,
+            mm_item_counts,
+        )
+        self._validate_mm_placeholders(mm_placeholders,
+                                       mm_item_counts,
+                                       use_audio_in_video=use_audio_in_video)
+
+        mm_placeholder_ranges = {
+            modality: [item.to_range() for item in placeholders]
+            for modality, placeholders in mm_placeholders.items()
+        }
+
+        if use_audio_in_video:
+            mm_kwargs["use_audio_in_video"] = True
+
+        return MultiModalInputs(
+            type="multimodal",
+            prompt=prompt,
+            prompt_token_ids=prompt_ids,
+            mm_kwargs=mm_kwargs,
+            mm_hashes=mm_hashes,
+            mm_placeholders=mm_placeholder_ranges,
+        )
+
     def _get_prompt_updates(
         self,
         mm_items: MultiModalDataItems,
@@ -352,7 +442,6 @@ class Qwen2_5OmniThinkerMultiModalProcessor(
                               getattr(tokenizer, "image_token", "<|IMAGE|>"))
         video_token = getattr(processor, "video_token",
                               getattr(tokenizer, "video_token", "<|VIDEO|>"))
-
         audio_token_id = vocab[audio_token]
         image_token_id = vocab[image_token]
         video_token_id = vocab[video_token]
@@ -371,7 +460,12 @@ class Qwen2_5OmniThinkerMultiModalProcessor(
                 feature_attention_mask.sum(-1))
             audio_output_lengths = audio_output_lens.tolist()
 
+        # number of audios read from video.
+        audio_in_video_item_idx = 0
+
         def get_replacement_qwen2_audio(item_idx: int):
+            item_idx += audio_in_video_item_idx
+
             num_features = audio_output_lengths[item_idx]
             if num_features == 0:
                 audios = mm_items.get_items("audio", AudioProcessorItems)
@@ -390,6 +484,37 @@ class Qwen2_5OmniThinkerMultiModalProcessor(
             token_id = image_token_id if modality == "image" else video_token_id
             return [token_id] * (int(grid_thw.prod()) // merge_length)
 
+        use_audio_in_video = hf_processor_mm_kwargs.get(
+            "use_audio_in_video", False)
+        thinker_config = self.info.get_hf_config()
+
+        def get_replacement_qwen2_use_audio_in_video(item_idx: int):
+            nonlocal audio_in_video_item_idx
+
+            audio_num_features = audio_output_lengths[audio_in_video_item_idx +
+                                                      item_idx]
+            video_grid_thw = out_mm_kwargs["video_grid_thw"][item_idx]
+
+            audio_in_video_item_idx += 1
+
+            second_per_grid_ts = hf_processor_mm_kwargs.get(
+                "second_per_grid_ts", None)
+            if second_per_grid_ts:
+                video_second_per_grid_t = second_per_grid_ts[item_idx]
+            else:
+                video_second_per_grid_t = 1.0
+
+            return MRotaryEmbedding.omni_get_updates_use_audio_in_video(
+                thinker_config=thinker_config,
+                audio_len=audio_num_features,
+                video_grid_thw=video_grid_thw,
+                video_second_per_grid_t=video_second_per_grid_t,
+            )
+
+        video_replacement_fn = (
+            get_replacement_qwen2_use_audio_in_video if use_audio_in_video else
+            partial(get_replacement_qwen2_vision, modality="video"))
+
         return [
             PromptReplacement(
                 modality="audio",
@@ -405,10 +530,22 @@ class Qwen2_5OmniThinkerMultiModalProcessor(
             PromptReplacement(
                 modality="video",
                 target=video_token,
-                replacement=partial(get_replacement_qwen2_vision,
-                                    modality="video"),
+                replacement=video_replacement_fn,
             ),
         ]
+
+    def _validate_mm_placeholders(
+        self,
+        mm_placeholders: Mapping[str, list[PlaceholderFeaturesInfo]],
+        mm_item_counts: Mapping[str, int],
+        use_audio_in_video: bool = False,
+    ) -> None:
+        if use_audio_in_video:
+            mm_item_counts = copy(mm_item_counts)
+            if "video" in mm_item_counts:
+                assert "audio" in mm_item_counts
+                mm_item_counts["audio"] -= mm_item_counts["video"]
+        super()._validate_mm_placeholders(mm_placeholders, mm_item_counts)
 
 
 class Qwen2_5OmniConditionalGenerationMixin:

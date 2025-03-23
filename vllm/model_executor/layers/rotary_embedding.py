@@ -1109,7 +1109,7 @@ class MRotaryEmbedding(RotaryEmbedding):
         use_audio_in_video: bool = False,
     ) -> Tuple[torch.Tensor, int]:
         """Get mrope input positions and delta value (Qwen2.5-Omni version).
-        
+
         Differences from MRotaryEmbedding:
             1. Add audio support (and related `audio_feature_lengths`).
             2. Add `use_audio_in_video` option to read audio from video inputs.
@@ -1145,7 +1145,6 @@ class MRotaryEmbedding(RotaryEmbedding):
             video_grid_thw = torch.tensor(video_grid_thw)
 
         src_item = input_tokens
-        position_id_per_seconds = tokens_per_second
         audio_seqlens = audio_feature_lengths
         if not second_per_grid_ts and video_grid_thw is not None:
             second_per_grid_ts = [1] * video_grid_thw.shape[0]
@@ -1180,8 +1179,7 @@ class MRotaryEmbedding(RotaryEmbedding):
                 grid_t = image_grid_thw[image_idx][0]
                 grid_hs = image_grid_thw[:, 1]
                 grid_ws = image_grid_thw[:, 2]
-                t_index = (torch.arange(grid_t) * 1 *
-                           position_id_per_seconds).long()
+                t_index = (torch.arange(grid_t) * 1 * tokens_per_second).long()
                 llm_pos_ids = cls._get_llm_pos_ids_for_vision(
                     start_idx, image_idx, spatial_merge_size, t_index, grid_hs,
                     grid_ws)
@@ -1196,7 +1194,7 @@ class MRotaryEmbedding(RotaryEmbedding):
                 grid_ws = video_grid_thw[:, 2]
                 t_index = (torch.arange(grid_t) *
                            second_per_grid_ts[video_idx] *
-                           position_id_per_seconds).long()
+                           tokens_per_second).long()
                 llm_pos_ids = cls._get_llm_pos_ids_for_vision(
                     start_idx, video_idx, spatial_merge_size, t_index, grid_hs,
                     grid_ws)
@@ -1215,11 +1213,10 @@ class MRotaryEmbedding(RotaryEmbedding):
                 grid_w = video_grid_thw[video_idx][2]
                 grid_hs = video_grid_thw[:, 1]
                 grid_ws = video_grid_thw[:, 2]
-                t_ntoken_per_chunk = int(position_id_per_seconds *
-                                         seconds_per_chunk)
+                t_ntoken_per_chunk = int(tokens_per_second * seconds_per_chunk)
                 t_index = (torch.arange(grid_t) *
                            second_per_grid_ts[video_idx] *
-                           position_id_per_seconds).long()
+                           tokens_per_second).long()
                 t_index_split_chunk = cls._split_list_into_ranges(
                     t_index, t_ntoken_per_chunk)
                 new_src_item.extend([audio_start_token_id])
@@ -1336,6 +1333,58 @@ class MRotaryEmbedding(RotaryEmbedding):
             mrope_position_delta + context_len,
             mrope_position_delta + seq_len,
         ).expand(3, -1)
+
+    @classmethod
+    def omni_get_updates_use_audio_in_video(
+        cls,
+        thinker_config: PretrainedConfig,
+        audio_len: int,
+        video_grid_thw: Union[List[int], torch.Tensor],
+        video_second_per_grid_t: float,
+    ) -> List[int]:
+        """Get video prompt updates when `use_audio_in_video` is True.
+
+        In this case, audio and vision update ids will be split into
+        chunks and interleaved (details in `_omni_get_input_positions_tensor`).
+
+        <|video_bos|><|VIDEO|><|video_eos|> =>
+        <|video_bos|><|audio_bos|>(... chunks ...)<|audio_eos|><|video_eos|>
+        """
+
+        audio_token_id = thinker_config.audio_token_index
+        video_token_id = thinker_config.video_token_index
+        audio_start_token_id = thinker_config.audio_start_token_id
+        audio_end_token_id = thinker_config.audio_end_token_id
+        seconds_per_chunk = thinker_config.seconds_per_chunk
+        spatial_merge_size = thinker_config.vision_config.spatial_merge_size
+        tokens_per_second = getattr(thinker_config.vision_config,
+                                    "tokens_per_second", 25)
+
+        grid_t = video_grid_thw[0]
+        grid_h = video_grid_thw[1]
+        grid_w = video_grid_thw[2]
+        t_ntoken_per_chunk = int(tokens_per_second * seconds_per_chunk)
+        t_index = (torch.arange(grid_t) * video_second_per_grid_t *
+                   tokens_per_second).long()
+        t_index_split_chunk = cls._split_list_into_ranges(
+            t_index, t_ntoken_per_chunk)
+
+        updates = [audio_start_token_id]
+        added_audio_len = 0
+        for t_chunk in t_index_split_chunk:
+            vision_ntoken_per_chunk = len(t_chunk) * grid_h * grid_w // (
+                spatial_merge_size**2)
+            updates.extend([video_token_id] * vision_ntoken_per_chunk)
+
+            audio_chunk_size = min(t_ntoken_per_chunk,
+                                   audio_len - added_audio_len)
+            updates.extend(audio_chunk_size * [audio_token_id])
+            added_audio_len += audio_chunk_size
+        if added_audio_len < audio_len:
+            updates.extend((audio_len - added_audio_len) * [audio_token_id])
+        updates.extend([audio_end_token_id])
+
+        return updates
 
 
 _ROPE_DICT: Dict[Tuple, RotaryEmbedding] = {}
