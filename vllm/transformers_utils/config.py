@@ -38,7 +38,7 @@ from vllm.transformers_utils.configs import (ChatGLMConfig, Cohere2Config,
                                              NemotronConfig, NVLM_D_Config,
                                              Olmo2Config, RWConfig,
                                              SolarConfig, Telechat2Config,
-                                             UltravoxConfig)
+                                             UltravoxConfig, SkyworkR1VChatConfig)
 # yapf: enable
 from vllm.transformers_utils.utils import check_gguf_file
 from vllm.utils import resolve_obj_by_qualname
@@ -72,6 +72,7 @@ _CONFIG_REGISTRY: Dict[str, Type[PretrainedConfig]] = {
     "exaone": ExaoneConfig,
     "h2ovl_chat": H2OVLChatConfig,
     "internvl_chat": InternVLChatConfig,
+    "skywork_chat": SkyworkR1VChatConfig,
     "nemotron": NemotronConfig,
     "NVLM_D": NVLM_D_Config,
     "olmo2": Olmo2Config,
