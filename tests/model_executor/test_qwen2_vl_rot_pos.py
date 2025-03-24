@@ -118,8 +118,8 @@ def test_qwen2_5_vl_get_window_index_correctness(dist_init, window_size, patch_s
                     grid_thw=grid_thw,
                 )
                 cu_window_seqlens_torch = torch.tensor(cu_window_seqlens_torch, dtype=torch.int64)
-                window_seqlens_torch = cu_window_seqlens_torch[1:] - cu_window_seqlens_torch[:-1]
                 cu_window_seqlens_torch = torch.unique_consecutive(cu_window_seqlens_torch.to(torch.int32))
+                window_seqlens_torch = cu_window_seqlens_torch[1:] - cu_window_seqlens_torch[:-1]
                 reverse_indices_torch = torch.argsort(window_index_torch)
 
                 # numba impl
