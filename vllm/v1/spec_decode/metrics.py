@@ -28,6 +28,12 @@ class SpecDecodingStats:
         self.num_accepted_tokens = 0
         self.num_emitted_tokens = 0
 
+    def observe(self, num_draft_tokens: int, num_accepted_tokens: int,
+                num_emitted_tokens: int):
+        self.num_draft_tokens += num_draft_tokens
+        self.num_accepted_tokens += num_accepted_tokens
+        self.num_emitted_tokens += num_emitted_tokens
+
 
 class SpecDecodingMetrics:
 

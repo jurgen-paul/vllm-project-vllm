@@ -52,7 +52,7 @@ class Request:
         self.num_prompt_tokens = len(self.prompt_token_ids)
         self._output_token_ids: list[int] = []
         self._all_token_ids: list[int] = self.prompt_token_ids.copy()
-        self.spec_token_ids: list[int] = []
+        self.spec_token_ids: Optional[list[int]] = None
         self.num_computed_tokens = 0
 
         # Multi-modal related
@@ -103,11 +103,16 @@ class Request:
 
     @property
     def num_tokens_with_spec(self) -> int:
-        return len(self._all_token_ids) + len(self.spec_token_ids)
+        return self.num_tokens + self.num_spec_tokens
 
     @property
     def num_output_tokens(self) -> int:
         return len(self._output_token_ids)
+
+    @property
+    def num_spec_tokens(self) -> int:
+        return (len(self.spec_token_ids)
+                if self.spec_token_ids is not None else 0)
 
     def is_finished(self) -> bool:
         return RequestStatus.is_finished(self.status)

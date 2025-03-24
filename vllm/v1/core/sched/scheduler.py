@@ -216,12 +216,13 @@ class Scheduler(SchedulerInterface):
             req_index += 1
 
             # Speculative decode related.
-            if request.spec_token_ids:
+            if request.num_spec_tokens > 0:
                 num_scheduled_spec_tokens = (num_new_tokens +
                                              request.num_computed_tokens -
                                              request.num_tokens)
                 if num_scheduled_spec_tokens > 0:
                     # Trim spec_token_ids list to num_scheduled_spec_tokens.
+                    assert request.spec_token_ids is not None
                     del request.spec_token_ids[num_scheduled_spec_tokens:]
                     scheduled_spec_decode_tokens[request.request_id] = (
                         request.spec_token_ids)
@@ -555,13 +556,12 @@ class Scheduler(SchedulerInterface):
 
             req_index = model_runner_output.req_id_to_index[req_id]
             generated_token_ids = sampled_token_ids[req_index]
-            if req_id not in scheduler_output.scheduled_spec_decode_tokens:
+            if request.spec_token_ids is None:
                 # When the request's num_computed_tokens catches up
                 # its num_tokens, the request generates output tokens.
                 # Otherwise, we ignore the sampler output for the request.
                 request.num_computed_tokens += num_tokens_scheduled
                 assert request.num_computed_tokens <= request.num_tokens
-                spec_decoding_stats.num_emitted_tokens += num_tokens_scheduled
             else:
                 # num_computed_tokens_step represents the number of tokens
                 # processed in the current step, considering scheduled
@@ -571,20 +571,31 @@ class Scheduler(SchedulerInterface):
                 #                            num_tokens_rejected,
                 # where num_tokens_rejected is given by:
                 # len(scheduled_spec_token_ids) + 1 - len(generated_token_ids).
-                scheduled_spec_token_ids = (
-                    scheduler_output.scheduled_spec_decode_tokens[req_id])
+                if req_id in scheduler_output.scheduled_spec_decode_tokens:
+                    scheduled_spec_token_ids = (
+                        scheduler_output.scheduled_spec_decode_tokens[req_id])
+                    num_computed_tokens_step = num_tokens_scheduled - (
+                        len(scheduled_spec_token_ids) + 1 -
+                        len(generated_token_ids))
 
-                num_computed_tokens_step = num_scheduled_tokens[req_id] - (
-                    len(scheduled_spec_token_ids) + 1 -
-                    len(generated_token_ids))
+                    num_draft_tokens = len(scheduled_spec_token_ids)
+                    num_accepted_tokens = len(generated_token_ids) - 1
+                else:
+                    num_computed_tokens_step = num_tokens_scheduled
+
+                    # If a drafter proposes zero tokens, treat this as if
+                    # num_spec_tokens were proposed and all rejected to
+                    # allow fair comparisons between drafters
+                    assert self.speculative_config is not None
+                    num_draft_tokens = \
+                        self.speculative_config.num_speculative_tokens
+                    num_accepted_tokens = 0
+
                 request.num_computed_tokens += num_computed_tokens_step
-
-                spec_decoding_stats.num_draft_tokens += len(
-                    scheduled_spec_token_ids)
-                spec_decoding_stats.num_accepted_tokens += len(
-                    generated_token_ids) - 1
-                spec_decoding_stats.num_emitted_tokens += \
-                    num_computed_tokens_step
+                spec_decoding_stats.observe(
+                    num_draft_tokens=num_draft_tokens,
+                    num_accepted_tokens=num_accepted_tokens,
+                    num_emitted_tokens=num_computed_tokens_step)
 
             cached_encoder_input_ids = (
                 self.encoder_cache_manager.get_cached_input_ids(request))
