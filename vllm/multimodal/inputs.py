@@ -374,7 +374,9 @@ class MultiModalFieldConfig:
         )
 
     @staticmethod
-    def flat(modality: str, slices: Sequence[slice], dim: Optional[int] = 0):
+    def flat(modality: str,
+             slices: Union[Sequence[slice], Sequence[Sequence[slice]]],
+             dim: Optional[int] = 0):
         """
         Defines a field where an element in the batch is obtained by
         slicing along the first dimension of the underlying data.
@@ -382,8 +384,9 @@ class MultiModalFieldConfig:
         Args:
             modality: The modality of the multi-modal item that uses this
                 keyword argument.
-            slices: For each multi-modal item, a slice that is used to extract
-                the data corresponding to it.
+            slices: For each multi-modal item, a slice (dim=0) or a tuple of
+                slices (dim>0) that is used to extract the data corresponding 
+                to it.
             dim: The dimension to extract data, default to 0.
 
         Example:
@@ -404,7 +407,10 @@ class MultiModalFieldConfig:
             .. code-block::
 
                 Given:
-                    slices: [slice(0, 3), slice(3, 7), slice(7, 9)]
+                    slices: [
+                        (slice(None), slice(0, 3)),
+                        (slice(None), slice(3, 7)),
+                        (slice(None), slice(7, 9))]
                     dim: 1
 
                 Input:
