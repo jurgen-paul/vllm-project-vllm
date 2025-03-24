@@ -117,7 +117,8 @@ def get_feature_extractor(
     trust_remote_code: bool = False,
     **kwargs: Any,
 ):
-    """Load an image processor for the given model name via HuggingFace."""
+    """Load an audio feature extractor for the given model name 
+    via HuggingFace."""
     # don't put this import at the top level
     # it will call torch.cuda.device_count()
     from transformers import AutoFeatureExtractor

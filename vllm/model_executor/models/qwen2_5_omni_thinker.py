@@ -35,6 +35,7 @@ from transformers.models.qwen2_5_omni.modeling_qwen2_5_omni import (
     Qwen2_5OmniAudioEncoder)
 from transformers.models.qwen2_5_omni.processing_qwen2_5_omni import (
     Qwen2_5OmniProcessor)
+from transformers.models.whisper import WhisperFeatureExtractor
 
 from vllm.config import VllmConfig
 from vllm.logger import init_logger
@@ -63,10 +64,7 @@ from vllm.multimodal.processing import (BaseMultiModalProcessor,
                                         PlaceholderFeaturesInfo,
                                         PromptReplacement, PromptUpdate)
 from vllm.multimodal.profiling import BaseDummyInputsBuilder, ProcessorInputs
-from vllm.sequence import IntermediateTensors, SequenceData
-from vllm.transformers_utils.processor import (
-    cached_feature_extractor_from_config)
-from vllm.utils import LRUCache
+from vllm.sequence import IntermediateTensors
 
 from .interfaces import SupportsMultiModal, SupportsPP
 from .utils import (AutoWeightsLoader, WeightsMapper,
@@ -149,8 +147,6 @@ class Qwen2_5OmniThinkerProcessingInfo(Qwen2AudioProcessingInfo,
             kwargs["fps"] = fps
         processor = self.ctx.get_hf_processor(
             Qwen2_5OmniProcessor,
-            feature_extractor=self.get_feature_extractor(
-                sampling_rate=sampling_rate),
             image_processor=self.get_image_processor(min_pixels=min_pixels,
                                                      max_pixels=max_pixels,
                                                      size=size),
@@ -170,21 +166,10 @@ class Qwen2_5OmniThinkerProcessingInfo(Qwen2AudioProcessingInfo,
         sampling_rate: Optional[int] = None,
         **kwargs: object,
     ):
-        return cached_feature_extractor_from_config(
-            self.ctx.model_config,
-            **self._get_feature_extractor_kwargs(sampling_rate=sampling_rate,
-                                                 **kwargs),
-        )
-
-    def _get_feature_extractor_kwargs(
-        self,
-        *,
-        sampling_rate: Optional[int] = None,
-        **kwargs: object,
-    ):
-        if sampling_rate is not None:
-            kwargs["sampling_rate"] = sampling_rate
-        return kwargs
+        hf_processor = self.get_hf_processor(sampling_rate=sampling_rate)
+        feature_extractor = hf_processor.feature_extractor  # type: ignore
+        assert isinstance(feature_extractor, WhisperFeatureExtractor)
+        return feature_extractor
 
     def get_max_audio_tokens(self) -> int:
         hf_config = self.get_hf_config()
@@ -209,7 +194,6 @@ class Qwen2_5OmniThinkerProcessingInfo(Qwen2AudioProcessingInfo,
 
 class Qwen2_5OmniThinkerDummyInputsBuilder(
         BaseDummyInputsBuilder[Qwen2_5OmniThinkerProcessingInfo]):
-    _processor_inputs_cache: LRUCache = LRUCache(capacity=1024)
 
     def get_dummy_processor_inputs(
         self,
@@ -219,35 +203,13 @@ class Qwen2_5OmniThinkerDummyInputsBuilder(
         num_audios = mm_counts.get("audio", 0)
         num_images = mm_counts.get("image", 0)
         num_videos = mm_counts.get("video", 0)
-        cache_key = (f"qwen2_omni_thinker_dummy_processor_inputs_"
-                     f"{seq_len}_{num_audios}_{num_images}_{num_videos}")
-        dummy_processor_inputs = (Qwen2_5OmniThinkerDummyInputsBuilder.
-                                  _processor_inputs_cache.get(cache_key))
-        if dummy_processor_inputs is not None:
-            return dummy_processor_inputs
 
-        dummy_processor_inputs = self._get_dummy_processor_inputs(
-            seq_len, num_audios, num_images, num_videos)
-        Qwen2_5OmniThinkerDummyInputsBuilder._processor_inputs_cache.put(
-            cache_key, dummy_processor_inputs)
-        return dummy_processor_inputs
-
-    def _get_dummy_processor_inputs(self, seq_len: int, num_audios: int,
-                                    num_images: int,
-                                    num_videos: int) -> ProcessorInputs:
         hf_processor = self.info.get_hf_processor()
         feature_extractor = self.info.get_feature_extractor()
 
-        audio_token: str = getattr(
-            hf_processor, "audio_token",
-            getattr(hf_processor.tokenizer, "audio_token", "<|AUDIO|>"))
-        image_token: str = getattr(
-            hf_processor, "image_token",
-            getattr(hf_processor.tokenizer, "image_token", "<|IMAGE|>"))
-        video_token: str = getattr(
-            hf_processor, "video_token",
-            getattr(hf_processor.tokenizer, "video_token", "<|VIDEO|>"))
-
+        audio_token: str = hf_processor.audio_token
+        image_token: str = hf_processor.image_token
+        video_token: str = hf_processor.video_token
         target_audio_length = min(
             feature_extractor.chunk_length,
             30,
@@ -297,12 +259,10 @@ class Qwen2_5OmniThinkerMultiModalProcessor(
         mm_data = dict(mm_data)
         audios = mm_data.pop("audios", [])
 
+        # NOTE: WhisperFeatureExtractor cannot handle empty list of audios
         if audios:
             mm_data["audios"] = audios
             mm_kwargs = dict(**mm_kwargs, )
-        else:
-            # NOTE: WhisperFeatureExtractor cannot handle empty list of audios
-            pass
 
         hf_inputs = super()._call_hf_processor(
             prompt=prompt,
@@ -435,13 +395,9 @@ class Qwen2_5OmniThinkerMultiModalProcessor(
             **hf_processor_mm_kwargs)
         vocab = tokenizer.get_vocab()
 
-        # Use getattr with default to be compatible with transformers<4.48
-        audio_token = getattr(processor, "audio_token",
-                              getattr(tokenizer, "audio_token", "<|AUDIO|>"))
-        image_token = getattr(processor, "image_token",
-                              getattr(tokenizer, "image_token", "<|IMAGE|>"))
-        video_token = getattr(processor, "video_token",
-                              getattr(tokenizer, "video_token", "<|VIDEO|>"))
+        audio_token = processor.audio_token
+        image_token = processor.image_token
+        video_token = processor.video_token
         audio_token_id = vocab[audio_token]
         image_token_id = vocab[image_token]
         video_token_id = vocab[video_token]
@@ -773,7 +729,8 @@ class Qwen2_5OmniThinkerForConditionalGeneration(
 
         return get_sampler()
 
-    def get_multimodal_embeddings(self, **kwargs) -> Optional[NestedTensors]:
+    def get_multimodal_embeddings(self,
+                                  **kwargs: object) -> Optional[NestedTensors]:
         audio_input = self._parse_and_validate_audio_input(**kwargs)
         image_input = self._parse_and_validate_image_input(**kwargs)
         video_input = self._parse_and_validate_video_input(**kwargs)
@@ -798,7 +755,6 @@ class Qwen2_5OmniThinkerForConditionalGeneration(
         self,
         input_ids: torch.Tensor,
         multimodal_embeddings: Optional[NestedTensors] = None,
-        seq_data: Optional[SequenceData] = None,
     ) -> torch.Tensor:
         inputs_embeds = self.language_model.get_input_embeddings(input_ids)
         if multimodal_embeddings is None:

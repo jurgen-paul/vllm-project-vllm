@@ -399,6 +399,20 @@ class MultiModalFieldConfig:
                     Element 1: [AAA]
                     Element 2: [BBBB]
                     Element 3: [CC]
+            
+            .. code-block::
+
+                Given:
+                    slices: [slice(0, 3), slice(3, 7), slice(7, 9)]
+                    dim: 1
+
+                Input:
+                    Data: [[A],[A],[A],[B],[B],[B],[B],[C],[C]]
+
+                Output:
+                    Element 1: [[A],[A],[A]]
+                    Element 2: [[B],[B],[B],[B]]
+                    Element 3: [[C],[C]]
         """
         return MultiModalFieldConfig(
             field=MultiModalFlatField(slices=slices, dim=dim),
@@ -434,6 +448,21 @@ class MultiModalFieldConfig:
                     Element 1: [AAA]
                     Element 2: [BBBB]
                     Element 3: [CC]
+
+            
+            .. code-block::
+
+                Given:
+                    slices: [3, 4, 2]
+                    dim: 1
+
+                Input:
+                    Data: [[A],[A],[A],[B],[B],[B],[B],[C],[C]]
+
+                Output:
+                    Element 1: [[A],[A],[A]]
+                    Element 2: [[B],[B],[B],[B]]
+                    Element 3: [[C],[C]]
     
         See also:
             :func:`MultiModalFieldConfig.flat`
