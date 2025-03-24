@@ -537,7 +537,7 @@ class Scheduler(SchedulerInterface):
         spec_token_ids = model_runner_output.spec_token_ids
         logprobs = model_runner_output.logprobs
         prompt_logprobs_dict = model_runner_output.prompt_logprobs_dict
-        spec_decoding_stats = SpecDecodingStats()
+        spec_decoding_stats = SpecDecodingStats() if self.log_stats else None
         num_scheduled_tokens = scheduler_output.num_scheduled_tokens
 
         new_running: list[Request] = []
@@ -556,12 +556,24 @@ class Scheduler(SchedulerInterface):
 
             req_index = model_runner_output.req_id_to_index[req_id]
             generated_token_ids = sampled_token_ids[req_index]
-            if request.spec_token_ids is None:
+            if req_id not in scheduler_output.scheduled_spec_decode_tokens:
                 # When the request's num_computed_tokens catches up
                 # its num_tokens, the request generates output tokens.
                 # Otherwise, we ignore the sampler output for the request.
                 request.num_computed_tokens += num_tokens_scheduled
                 assert request.num_computed_tokens <= request.num_tokens
+
+                # If a drafter proposes zero tokens, treat this as if
+                # num_spec_tokens were proposed and all rejected to
+                # allow fair comparisons between drafters
+                if (request.spec_token_ids is not None
+                        and spec_decoding_stats is not None):
+                    assert self.speculative_config is not None
+                    spec_decoding_stats.observe(
+                        num_draft_tokens=self.speculative_config.
+                        num_speculative_tokens,
+                        num_accepted_tokens=0,
+                        num_emitted_tokens=num_tokens_scheduled)
             else:
                 # num_computed_tokens_step represents the number of tokens
                 # processed in the current step, considering scheduled
@@ -571,31 +583,19 @@ class Scheduler(SchedulerInterface):
                 #                            num_tokens_rejected,
                 # where num_tokens_rejected is given by:
                 # len(scheduled_spec_token_ids) + 1 - len(generated_token_ids).
-                if req_id in scheduler_output.scheduled_spec_decode_tokens:
-                    scheduled_spec_token_ids = (
-                        scheduler_output.scheduled_spec_decode_tokens[req_id])
-                    num_computed_tokens_step = num_tokens_scheduled - (
-                        len(scheduled_spec_token_ids) + 1 -
-                        len(generated_token_ids))
+                scheduled_spec_token_ids = (
+                    scheduler_output.scheduled_spec_decode_tokens[req_id])
 
-                    num_draft_tokens = len(scheduled_spec_token_ids)
-                    num_accepted_tokens = len(generated_token_ids) - 1
-                else:
-                    num_computed_tokens_step = num_tokens_scheduled
-
-                    # If a drafter proposes zero tokens, treat this as if
-                    # num_spec_tokens were proposed and all rejected to
-                    # allow fair comparisons between drafters
-                    assert self.speculative_config is not None
-                    num_draft_tokens = \
-                        self.speculative_config.num_speculative_tokens
-                    num_accepted_tokens = 0
-
+                num_computed_tokens_step = num_scheduled_tokens[req_id] - (
+                    len(scheduled_spec_token_ids) + 1 -
+                    len(generated_token_ids))
                 request.num_computed_tokens += num_computed_tokens_step
-                spec_decoding_stats.observe(
-                    num_draft_tokens=num_draft_tokens,
-                    num_accepted_tokens=num_accepted_tokens,
-                    num_emitted_tokens=num_computed_tokens_step)
+
+                if spec_decoding_stats is not None:
+                    spec_decoding_stats.observe(
+                        num_draft_tokens=len(scheduled_spec_token_ids),
+                        num_accepted_tokens=len(generated_token_ids) - 1,
+                        num_emitted_tokens=num_computed_tokens_step)
 
             cached_encoder_input_ids = (
                 self.encoder_cache_manager.get_cached_input_ids(request))
