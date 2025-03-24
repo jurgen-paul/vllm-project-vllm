@@ -294,7 +294,7 @@ class MultiModalFlatField(BaseMultiModalField):
         :func:`MultiModalFieldConfig.flat`
         :func:`MultiModalFieldConfig.flat_from_sizes`
     """
-    slices: Sequence[slice]
+    slices: Union[Sequence[slice], Sequence[Sequence[slice]]]
     dim: Optional[int] = 0
 
     def build_elems(
