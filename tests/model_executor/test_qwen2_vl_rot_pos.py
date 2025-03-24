@@ -88,7 +88,7 @@ def test_qwen2_5_vl_get_window_index_correctness(dist_init, window_size, patch_s
         "hidden_size": 1280,
         "intermediate_size": 3420,
         "num_heads": 16,
-        "in": 3,
+        "in_channels": 3,
         "out_hidden_size": 3584,
         "patch_size": patch_size,
         "spatial_merge_size": spatial_merge_size,
