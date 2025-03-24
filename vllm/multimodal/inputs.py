@@ -317,6 +317,7 @@ class MultiModalFlatField(BaseMultiModalField):
             if all(elem.shape[1:] == first_shape[1:] for elem in batch):
                 return torch.concat(batch, dim=self.dim)
 
+        assert self.dim == 0, "dim == 0 is required for nested list"
         return [e for elem in batch for e in elem]
 
 
