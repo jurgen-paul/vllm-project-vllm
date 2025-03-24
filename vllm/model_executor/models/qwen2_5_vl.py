@@ -686,7 +686,7 @@ class Qwen2_5_VisionTransformer(nn.Module):
         - instead of returning tuple[window_indices, cu_window_seqlens],
             it returns tuple[window_indices, reverse_indices, window_seqlens, cu_window_seqlens]
         - it prevents zero in `window_seqlens`, so there is no need to call 
-            `torch.unique_consecutive` on cumsum of window_seqlens
+            `torch.unique_consecutive` on cu_window_seqlens
         """
         spatial_merge_unit = spatial_merge_size * spatial_merge_size
         vit_merger_window_size = window_size // spatial_merge_size // patch_size
