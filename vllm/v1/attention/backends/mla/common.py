@@ -363,6 +363,8 @@ class MLACommonMetadataBuilder(Generic[M]):
         self.num_heads = model_config.get_num_attention_heads(
             runner.parallel_config)
         self.mla_dims = get_mla_dims(model_config)
+        self.aot_schedule = (get_flash_attn_version() == 3)
+        self.page_size = self.runner.block_size
 
         if self.chunked_prefill_enabled:
             self.chunked_prefill_workspace_size = min(
@@ -388,7 +390,6 @@ class MLACommonMetadataBuilder(Generic[M]):
                 dtype=model_config.dtype,
                 device=runner.device,
             )
-            self.page_size = self.runner.block_size
 
     def reorder_batch(self, input_batch: "InputBatch",
                       scheduler_output: "SchedulerOutput") -> bool:
@@ -481,8 +482,6 @@ class MLACommonMetadataBuilder(Generic[M]):
         seq_lens = seq_lens_cpu.to(device, non_blocking=True)
         max_seq_len = seq_lens_cpu.max().item()
 
-        aot_schedule = (get_flash_attn_version() == 3)
-
         prefill_metadata = None
         if self._num_prefills > 0:
             reqs_start = self._num_decodes  # prefill_start
@@ -496,7 +495,7 @@ class MLACommonMetadataBuilder(Generic[M]):
                 reqs_start:] - query_start_loc[reqs_start]
 
             scheduler_metadata = None
-            if aot_schedule:
+            if self.aot_schedule:
                 scheduler_metadata = get_scheduler_metadata(
                     batch_size=self._num_prefills,
                     max_seqlen_q=max_query_len,
@@ -560,7 +559,7 @@ class MLACommonMetadataBuilder(Generic[M]):
                              dtype=torch.int32)
 
                 scheduler_metadatas = None
-                if aot_schedule:
+                if self.aot_schedule:
                     scheduler_metadatas = []
                     for i in range(num_chunks):
                         scheduler_metadatas.append(
