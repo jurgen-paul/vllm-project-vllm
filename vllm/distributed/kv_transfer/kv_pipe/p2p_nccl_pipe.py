@@ -70,9 +70,8 @@ class P2pNcclPipe:
                 comm: ncclComm_t = self.nccl.ncclCommInitRank(
                     2, unique_id, rank)
                 self.comms[remote_address] = (comm, rank)
-                logger.info(
-                    f"ncclCommInitRank Success, {self.local_address} 👉 {remote_address}, MyRank: {rank}"
-                )
+                logger.info("ncclCommInitRank Success, %s 👉 %s, MyRank: %s",
+                            self.local_address, remote_address, rank)
 
         return self.socks[remote_address], self.comms[remote_address]
 
@@ -103,8 +102,8 @@ class P2pNcclPipe:
             if response == b"0" and tensor is not None:
                 self._send(comm, tensor.to(self.device), rank ^ 1)
                 logger.info(
-                    f"Send Tensor Success, {self.local_address} 👉 {remote_address}, MyRank: {rank}, {data=}, {tensor=}"
-                )
+                    "Send Tensor Success, %s 👉 %s, MyRank: %s, data: %s, tensor: %s",
+                    self.local_address, remote_address, rank, data, tensor)
 
     def recv_tensor(
         self,
@@ -145,9 +144,8 @@ class P2pNcclPipe:
             if self.router_socket in socks:
                 remote_address, message = self.router_socket.recv_multipart()
                 data = pickle.loads(message)
-                logger.debug(
-                    f"Received message from {remote_address.decode()}, {data=}"
-                )
+                logger.debug("Received message from %s, data: %s",
+                             remote_address.decode(), data)
                 if data["cmd"] == "NEW":
                     unique_id = pickle.loads(data["unique_id"])
                     with torch.cuda.device(self.device):
@@ -156,8 +154,8 @@ class P2pNcclPipe:
                             2, unique_id, rank)
                         self.comms[remote_address] = (comm, rank)
                         logger.info(
-                            f"ncclCommInitRank Success, {self.local_address} 👈 {remote_address.decode()}, MyRank: {rank}"
-                        )
+                            "ncclCommInitRank Success, %s 👈 %s, MyRank: %s",
+                            self.local_address, remote_address.decode(), rank)
                 elif data["cmd"] == "PUT":
                     tensor_id = data["tensor_id"]
                     self.router_socket.send_multipart([remote_address, b"0"])
@@ -168,8 +166,9 @@ class P2pNcclPipe:
                     self._recv(comm, tensor, rank ^ 1)
                     self.store[tensor_id] = tensor
                     logger.info(
-                        f"Recv Tensor Success, {self.local_address} 👈 {remote_address.decode()}, MyRank: {rank}, {data=}, {tensor=}"
-                    )
+                        "Recv Tensor Success, %s 👈 %s, MyRank: %s, data: %s, tensor: %s",
+                        self.local_address, remote_address.decode(), rank,
+                        data, tensor)
                 elif data["cmd"] == "GET":
                     tensor_id = data["tensor_id"]
                     if tensor_id in self.store:
@@ -186,9 +185,8 @@ class P2pNcclPipe:
                         self._send(comm, self.store[tensor_id].to(self.device),
                                    rank ^ 1)
                 else:
-                    logger.info(
-                        f"Bug, Received message from {remote_address}, {data=}"
-                    )
+                    logger.info("Bug, Received message from %s, data: %s",
+                                remote_address, data)
 
     def _send(self, comm, tensor: torch.Tensor, dst: int, stream=None):
         assert tensor.device == self.device, (
