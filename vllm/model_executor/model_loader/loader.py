@@ -56,6 +56,7 @@ from vllm.model_executor.model_loader.weight_utils import (
     runai_safetensors_weights_iterator, safetensors_weights_iterator)
 from vllm.model_executor.utils import set_weight_attrs
 from vllm.platforms import current_platform
+from vllm.transformers_utils.config import model_overwrite
 from vllm.transformers_utils.s3_utils import glob as s3_glob
 from vllm.transformers_utils.utils import is_s3
 from vllm.utils import is_pin_memory_available
@@ -266,6 +267,9 @@ class DefaultModelLoader(BaseModelLoader):
         """Prepare weights for the model.
 
         If the model is not local, it will be downloaded."""
+
+        model_name_or_path = model_overwrite(model_name_or_path)
+
         model_name_or_path = (self._maybe_download_from_modelscope(
             model_name_or_path, revision) or model_name_or_path)
 
@@ -648,6 +652,9 @@ class ShardedStateLoader(BaseModelLoader):
 
     def _prepare_weights(self, model_name_or_path: str,
                          revision: Optional[str]):
+
+        model_name_or_path = model_overwrite(model_name_or_path)
+
         if os.path.isdir(model_name_or_path):
             return model_name_or_path
         else:
