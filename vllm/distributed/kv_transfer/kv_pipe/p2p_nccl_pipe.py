@@ -4,7 +4,7 @@ import pickle
 import socket
 import threading
 import typing
-from typing import Optional
+from typing import Dict, Optional
 
 import torch
 import zmq
@@ -42,9 +42,9 @@ class P2pNcclPipe:
         self.poller = zmq.Poller()
         self.poller.register(self.router_socket, zmq.POLLIN)
 
-        self.store = {}  # tensor_id: torch.Tensor
-        self.socks = {}  # remote_address: client socket
-        self.comms = {}  # remote_address: ncclComm_t
+        self.store: Dict[str, torch.Tensor] = {}  # tensor_id: torch.Tensor
+        self.socks: Dict[str, Any] = {}  # remote_address: client socket
+        self.comms: Dict[str, Any] = {}  # remote_address: (ncclComm_t, rank)
 
         self._listener_thread = threading.Thread(
             target=self._listen_for_requests, daemon=True)
