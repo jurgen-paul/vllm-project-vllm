@@ -35,8 +35,7 @@ def test(model, use_v1):
 
     # Create an LLM.
     llm = LLM(model=model)
-    # Generate texts from the prompts. The output is a list of RequestOutput objects
-    # that contain the prompt, generated text, and other information.
+
     outputs = llm.generate(prompts, sampling_params)
     # Print the outputs.
     for output in outputs:
