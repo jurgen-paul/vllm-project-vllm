@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import os
 
 VLLM_MODEL_OVERWRITE_PATH = ".model.overwrite"

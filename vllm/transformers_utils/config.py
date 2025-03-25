@@ -23,9 +23,7 @@ from transformers.models.auto.image_processing_auto import (
 from transformers.models.auto.modeling_auto import (
     MODEL_FOR_CAUSAL_LM_MAPPING_NAMES)
 from transformers.utils import CONFIG_NAME as HF_CONFIG_NAME
-from vllm import envs
-
-from vllm.envs import VLLM_USE_MODELSCOPE
+from vllm.envs import VLLM_MODEL_OVERWRITE_PATH, VLLM_USE_MODELSCOPE
 from vllm.logger import init_logger
 # yapf conflicts with isort for this block
 # yapf: disable
@@ -511,8 +509,6 @@ def get_sentence_transformer_tokenizer_config(model: str,
     for the Sentence Transformer BERT model.
     """
 
-
-
     sentence_transformer_config_files = [
         "sentence_bert_config.json",
         "sentence_roberta_config.json",
@@ -787,7 +783,7 @@ def model_overwrite(model: str):
     :return: maybe overwrite to a local folder
     """
 
-    model_overwrite_path = envs.VLLM_MODEL_OVERWRITE_PATH
+    model_overwrite_path = VLLM_MODEL_OVERWRITE_PATH
 
     if not model_overwrite_path:
         return model
@@ -803,9 +799,10 @@ def model_overwrite(model: str):
                 model_name, overwrite_name = line.split("\t")
                 overwrite_name = overwrite_name.strip()
                 if model == model_name:
-                    logger.info("model overwrite: [ %s ] -> [ %s ]", model, overwrite_name)
+                    logger.info("model overwrite: [ %s ] -> [ %s ]", model,
+                                overwrite_name)
                     return overwrite_name
             except Exception:
-                print(line)
+                pass
 
     return model
