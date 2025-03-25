@@ -43,17 +43,14 @@ def process_task3(name):
 
 
 if __name__ == "__main__":
-    # 创建两个进程
     process1 = multiprocessing.Process(target=process_task1, args=("Task1", ))
     process2 = multiprocessing.Process(target=process_task2, args=("Task2", ))
     process3 = multiprocessing.Process(target=process_task3, args=("Task3", ))
 
-    # 启动进程
     process1.start()
     process2.start()
     process3.start()
 
-    # 等待进程结束
     process1.join()
     process2.join()
     process3.join()
