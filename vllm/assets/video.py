@@ -82,3 +82,8 @@ class VideoAsset:
         video_path = download_video_asset(self.name)
         ret = video_to_ndarrays(video_path, self.num_frames)
         return ret
+
+    def get_audio(self, sampling_rate: float = None) -> npt.NDArray:
+        import librosa
+        video_path = download_video_asset(self.name)
+        return librosa.load(video_path, sr=sampling_rate)[0]
