@@ -22,6 +22,7 @@ from vllm.v1.engine import (EngineCoreEventType, EngineCoreOutput,
 from vllm.v1.metrics.stats import SchedulerStats
 from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus
+from vllm.v1.spec_decode.metrics import SpecDecodingStats
 from vllm.v1.structured_output import StructuredOutputManager
 
 logger = init_logger(__name__)
@@ -215,12 +216,13 @@ class Scheduler(SchedulerInterface):
             req_index += 1
 
             # Speculative decode related.
-            if request.spec_token_ids:
+            if request.num_spec_tokens > 0:
                 num_scheduled_spec_tokens = (num_new_tokens +
                                              request.num_computed_tokens -
                                              request.num_tokens)
                 if num_scheduled_spec_tokens > 0:
                     # Trim spec_token_ids list to num_scheduled_spec_tokens.
+                    assert request.spec_token_ids is not None
                     del request.spec_token_ids[num_scheduled_spec_tokens:]
                     scheduled_spec_decode_tokens[request.request_id] = (
                         request.spec_token_ids)
@@ -535,6 +537,7 @@ class Scheduler(SchedulerInterface):
         spec_token_ids = model_runner_output.spec_token_ids
         logprobs = model_runner_output.logprobs
         prompt_logprobs_dict = model_runner_output.prompt_logprobs_dict
+        spec_decoding_stats = SpecDecodingStats() if self.log_stats else None
         num_scheduled_tokens = scheduler_output.num_scheduled_tokens
 
         new_running: list[Request] = []
@@ -559,6 +562,18 @@ class Scheduler(SchedulerInterface):
                 # Otherwise, we ignore the sampler output for the request.
                 request.num_computed_tokens += num_tokens_scheduled
                 assert request.num_computed_tokens <= request.num_tokens
+
+                # If a drafter proposes zero tokens, treat this as if
+                # num_spec_tokens were proposed and all rejected to
+                # allow fair comparisons between drafters
+                if (request.spec_token_ids is not None
+                        and spec_decoding_stats is not None):
+                    assert self.speculative_config is not None
+                    spec_decoding_stats.observe(
+                        num_draft_tokens=self.speculative_config.
+                        num_speculative_tokens,
+                        num_accepted_tokens=0,
+                        num_emitted_tokens=num_tokens_scheduled)
             else:
                 # num_computed_tokens_step represents the number of tokens
                 # processed in the current step, considering scheduled
@@ -575,6 +590,12 @@ class Scheduler(SchedulerInterface):
                     len(scheduled_spec_token_ids) + 1 -
                     len(generated_token_ids))
                 request.num_computed_tokens += num_computed_tokens_step
+
+                if spec_decoding_stats is not None:
+                    spec_decoding_stats.observe(
+                        num_draft_tokens=len(scheduled_spec_token_ids),
+                        num_accepted_tokens=len(generated_token_ids) - 1,
+                        num_emitted_tokens=num_computed_tokens_step)
 
             cached_encoder_input_ids = (
                 self.encoder_cache_manager.get_cached_input_ids(request))
@@ -649,7 +670,7 @@ class Scheduler(SchedulerInterface):
         self.running = new_running
         return EngineCoreOutputs(
             outputs=outputs,
-            scheduler_stats=self.make_stats(),
+            scheduler_stats=self.make_stats(spec_decoding_stats),
         )
 
     def add_request(self, request: Request) -> None:
@@ -710,7 +731,10 @@ class Scheduler(SchedulerInterface):
     def reset_prefix_cache(self) -> bool:
         return self.kv_cache_manager.reset_prefix_cache()
 
-    def make_stats(self) -> Optional[SchedulerStats]:
+    def make_stats(
+        self,
+        spec_decoding_stats: Optional[SpecDecodingStats] = None,
+    ) -> Optional[SchedulerStats]:
         if not self.log_stats:
             return None
         return SchedulerStats(
@@ -718,4 +742,5 @@ class Scheduler(SchedulerInterface):
             num_waiting_reqs=len(self.waiting),
             gpu_cache_usage=self.kv_cache_manager.usage,
             prefix_cache_stats=self.kv_cache_manager.make_prefix_cache_stats(),
+            spec_decoding_stats=spec_decoding_stats,
         )

@@ -87,7 +87,8 @@ class ModelRunnerOutput:
     sampled_token_ids: list[list[int]]
 
     # num_reqs x num_spec_tokens
-    spec_token_ids: Optional[list[list[int]]]
+    # An empty sequence signifies the drafter proposed no tokens
+    spec_token_ids: Optional[list[Optional[list[int]]]]
 
     # [num_reqs, max_num_logprobs + 1]
     # [num_reqs, max_num_logprobs + 1]
