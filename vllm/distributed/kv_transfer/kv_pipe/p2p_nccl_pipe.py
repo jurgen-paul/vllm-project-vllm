@@ -129,9 +129,9 @@ class P2pNcclPipe:
 
         message = sock.recv()
         data = pickle.loads(message)
-        if data.ret == 0:
-            tensor = torch.empty(data.shape,
-                                 dtype=data.dtype,
+        if data["ret"] == 0:
+            tensor = torch.empty(data["shape"],
+                                 dtype=data["dtype"],
                                  device=self.device)
             self._recv(comm, tensor, rank ^ 1)
             return tensor
