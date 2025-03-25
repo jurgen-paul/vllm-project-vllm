@@ -166,6 +166,8 @@ class SequenceData(msgspec.Struct,
     _output_token_ids: array = msgspec.field(
         default_factory=lambda: array(VLLM_TOKEN_ID_ARRAY_TYPE, []))
 
+    _prompt_embeds: Optional[torch.Tensor] = None
+
     ### The below fields should not be passed as an argument ###
     _cumulative_logprob: float = 0.0
     _prompt_token_ids_tuple: tuple[int,
@@ -281,6 +283,14 @@ class SequenceData(msgspec.Struct,
         return self._output_token_ids
 
     @property
+    def prompt_embeds(self) -> Optional[torch.Tensor]:
+        return self._prompt_embeds
+
+    @prompt_embeds.setter
+    def prompt_embeds(self, prompt_embeds: torch.Tensor) -> None:
+        self._prompt_embeds = prompt_embeds
+
+    @property
     def mrope_position_delta(self) -> Optional[int]:
         return self._mrope_position_delta
 
@@ -385,11 +395,13 @@ class SequenceData(msgspec.Struct,
         return self._stage
 
     def __repr__(self) -> str:
-        return (f"SequenceData("
-                f"prompt_token_ids={self._prompt_token_ids}, "
-                f"output_token_ids={self.output_token_ids}, "
-                f"cumulative_logprob={self.cumulative_logprob}, "
-                f"get_num_computed_tokens={self.get_num_computed_tokens()})")
+        return (
+            f"SequenceData("
+            f"prompt_token_ids={self._prompt_token_ids}, "
+            f"prompt_embeds={getattr(self._prompt_embeds, 'shape', None)}, "
+            f"output_token_ids={self.output_token_ids}, "
+            f"cumulative_logprob={self.cumulative_logprob}, "
+            f"get_num_computed_tokens={self.get_num_computed_tokens()})")
 
 
 class Sequence:
@@ -426,6 +438,7 @@ class Sequence:
         self.prompt_adapter_request = prompt_adapter_request
 
         self.data = SequenceData.from_seqs(self.prompt_token_ids)
+        self.data.prompt_embeds = self.inputs.prompt_embeds
         self.output_logprobs: SampleLogprobs = []
         self.output_text = ""
 
