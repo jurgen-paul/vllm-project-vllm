@@ -97,6 +97,7 @@ if TYPE_CHECKING:
     VLLM_MARLIN_USE_ATOMIC_ADD: bool = False
     VLLM_V0_USE_OUTLINES_CACHE: bool = False
     VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION: bool = False
+    VLLM_MODEL_OVERWRITE_PATH: Optional[str] = None
 
 
 def get_default_cache_root():
@@ -612,6 +613,11 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # Whether to use S3 path for model loading in CI via RunAI Streamer
     "VLLM_CI_USE_S3":
     lambda: os.environ.get("VLLM_CI_USE_S3", "0") == "1",
+
+    # Use model_overwrite to redirect the model name to a local folder
+    # while keeping the model name in the test file without being hardcoded.
+    "VLLM_MODEL_OVERWRITE_PATH":
+    lambda: os.environ.get("VLLM_MODEL_OVERWRITE_PATH", None),
 
     # Whether to use atomicAdd reduce in gptq/awq marlin kernel.
     "VLLM_MARLIN_USE_ATOMIC_ADD":

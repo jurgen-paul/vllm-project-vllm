@@ -23,6 +23,7 @@ from transformers.models.auto.image_processing_auto import (
 from transformers.models.auto.modeling_auto import (
     MODEL_FOR_CAUSAL_LM_MAPPING_NAMES)
 from transformers.utils import CONFIG_NAME as HF_CONFIG_NAME
+from vllm import envs
 
 from vllm.envs import VLLM_USE_MODELSCOPE
 from vllm.logger import init_logger
@@ -115,6 +116,8 @@ def list_repo_files(
     token: Union[str, bool, None] = None,
 ) -> list[str]:
 
+    repo_id = model_overwrite(repo_id)
+
     def lookup_files() -> list[str]:
         # directly list files if model is local
         if (local_path := Path(repo_id)).exists():
@@ -161,6 +164,9 @@ def file_exists(
 # In offline mode the result can be a false negative
 def file_or_path_exists(model: Union[str, Path], config_name: str,
                         revision: Optional[str]) -> bool:
+
+    model = model_overwrite(model)
+
     if (local_path := Path(model)).exists():
         return (local_path / config_name).is_file()
 
@@ -246,6 +252,8 @@ def get_config(
     **kwargs,
 ) -> PretrainedConfig:
     # Separate model folder from file path for GGUF models
+
+    model = model_overwrite(model)
 
     is_gguf = check_gguf_file(model)
     if is_gguf:
@@ -344,6 +352,9 @@ def get_config(
 def try_get_local_file(model: Union[str, Path],
                        file_name: str,
                        revision: Optional[str] = 'main') -> Optional[Path]:
+
+    model = model_overwrite(model)
+
     file_path = Path(model) / file_name
     if file_path.is_file():
         return file_path
@@ -499,6 +510,9 @@ def get_sentence_transformer_tokenizer_config(model: str,
     - dict: A dictionary containing the configuration parameters
     for the Sentence Transformer BERT model.
     """
+
+
+
     sentence_transformer_config_files = [
         "sentence_bert_config.json",
         "sentence_roberta_config.json",
@@ -702,6 +716,9 @@ def get_hf_image_processor_config(
     revision: Optional[str] = None,
     **kwargs,
 ) -> Dict[str, Any]:
+
+    model = model_overwrite(model)
+
     # ModelScope does not provide an interface for image_processor
     if VLLM_USE_MODELSCOPE:
         return dict()
@@ -758,3 +775,37 @@ def get_cross_encoder_activation_function(config: PretrainedConfig):
         return resolve_obj_by_qualname(function_name)()
     else:
         return nn.Sigmoid() if config.num_labels == 1 else nn.Identity()
+
+
+@cache
+def model_overwrite(model: str):
+    """
+    Use model_overwrite to redirect the model name to a local folder
+    while keeping the model name in the test file without being hardcoded.
+
+    :param model: hf model name
+    :return: maybe overwrite to a local folder
+    """
+
+    model_overwrite_path = envs.VLLM_MODEL_OVERWRITE_PATH
+
+    if not model_overwrite_path:
+        return model
+
+    import pathlib
+
+    if not pathlib.Path(model_overwrite_path).exists():
+        return model
+
+    with open(model_overwrite_path) as f:
+        for line in f.readlines():
+            try:
+                model_name, overwrite_name = line.split("\t")
+                overwrite_name = overwrite_name.strip()
+                if model == model_name:
+                    logger.info("model overwrite: [ %s ] -> [ %s ]", model, overwrite_name)
+                    return overwrite_name
+            except Exception:
+                print(line)
+
+    return model
