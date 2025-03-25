@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import torch
 import multiprocessing
 import time
 
+import torch
+
 from vllm.distributed.kv_transfer.kv_pipe.p2p_nccl_pipe import P2pNcclPipe
+
 
 def process_task1(name):
     pipe = P2pNcclPipe(0, "127.0.0.1", 10001)
@@ -30,19 +31,22 @@ def process_task1(name):
 
     time.sleep(100000)
 
+
 def process_task2(name):
-    pipe = P2pNcclPipe(1, "127.0.0.1", 10002)
+    P2pNcclPipe(1, "127.0.0.1", 10002)
     time.sleep(100000)
 
+
 def process_task3(name):
-    pipe = P2pNcclPipe(2, "127.0.0.1", 10003)
+    P2pNcclPipe(2, "127.0.0.1", 10003)
     time.sleep(100000)
+
 
 if __name__ == "__main__":
     # 创建两个进程
-    process1 = multiprocessing.Process(target=process_task1, args=("Task1",))
-    process2 = multiprocessing.Process(target=process_task2, args=("Task2",))
-    process3 = multiprocessing.Process(target=process_task3, args=("Task3",))
+    process1 = multiprocessing.Process(target=process_task1, args=("Task1", ))
+    process2 = multiprocessing.Process(target=process_task2, args=("Task2", ))
+    process3 = multiprocessing.Process(target=process_task3, args=("Task3", ))
 
     # 启动进程
     process1.start()
@@ -52,4 +56,4 @@ if __name__ == "__main__":
     # 等待进程结束
     process1.join()
     process2.join()
-    process3.start()
+    process3.join()
