@@ -29,10 +29,10 @@
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define DIVIDE_ROUND_UP(a, b) (((a) + (b) - 1) / (b))
 
-#define LAUNCH_PAGED_ATTENTION_V2(HEAD_SIZE)                                   \
-  vllm::paged_attention_v2_kernel<T, CACHE_T, HEAD_SIZE, BLOCK_SIZE,           \
-                                  NUM_THREADS, KV_DTYPE, IS_BLOCK_SPARSE,      \
-                                  PARTITION_SIZE>                              \
+#define LAUNCH_PAGED_ATTENTION_V3(HEAD_SIZE)                                   \
+  vllm::paged_attention_v3_kernel<T, CACHE_T, HEAD_SIZE, BLOCK_SIZE, KV_DTYPE, \
+                                  IS_BLOCK_SPARSE, NUM_Q_HEADS_PER_KV,         \
+                                  NUM_QUERY_THREADS, PARTITION_SIZE>           \
       <<<grid, block, shared_mem_size, stream>>>(                              \
           exp_sums_ptr, max_logits_ptr, tmp_out_ptr, query_ptr, key_cache_ptr, \
           value_cache_ptr, num_kv_heads, scale, block_tables_ptr,              \
@@ -40,16 +40,18 @@
           kv_block_stride, kv_head_stride, k_scale_ptr, v_scale_ptr, tp_rank,  \
           blocksparse_local_blocks, blocksparse_vert_stride,                   \
           blocksparse_block_size, blocksparse_head_sliding_step);              \
-  vllm::paged_attention_partitions_reduce_kernel<T, HEAD_SIZE, NUM_THREADS,    \
-                                                 PARTITION_SIZE>               \
-      <<<reduce_grid, block, reduce_shared_mem_size, stream>>>(                \
+  vllm::paged_attention_partitions_reduce_kernel<                              \
+      T, HEAD_SIZE, NUM_QUERY_THREADS, PARTITION_SIZE>                         \
+      <<<reduce_grid, reduce_block, reduce_shared_mem_size, stream>>>(         \
           out_ptr, exp_sums_ptr, max_logits_ptr, tmp_out_ptr, seq_lens_ptr,    \
           max_num_partitions);
 
+// TODO(Wenqin): Try to tune NUM_QUERY_THREADS and PARTITION_SIZE later.
 template <typename T, typename CACHE_T, int BLOCK_SIZE,
           vllm::Fp8KVCacheDataType KV_DTYPE, bool IS_BLOCK_SPARSE,
-          int NUM_THREADS = 128, int PARTITION_SIZE = 512>
-void paged_attention_v2_launcher(
+          int NUM_Q_HEADS_PER_KV, int NUM_QUERY_THREADS = 32,
+          int PARTITION_SIZE = 512>
+void paged_attention_v3_launcher(
     torch::Tensor& out, torch::Tensor& exp_sums, torch::Tensor& max_logits,
     torch::Tensor& tmp_out, torch::Tensor& query, torch::Tensor& key_cache,
     torch::Tensor& value_cache, int num_kv_heads, float scale,
@@ -87,19 +89,21 @@ void paged_attention_v2_launcher(
   const float* k_scale_ptr = reinterpret_cast<const float*>(k_scale.data_ptr());
   const float* v_scale_ptr = reinterpret_cast<const float*>(v_scale.data_ptr());
 
-  constexpr int NUM_WARPS = NUM_THREADS / WARP_SIZE;
   int max_num_partitions = DIVIDE_ROUND_UP(max_seq_len, PARTITION_SIZE);
-  int logits_size = PARTITION_SIZE * sizeof(float);
-  int outputs_size = (NUM_WARPS / 2) * head_size * sizeof(float);
+  int logits_size = NUM_Q_HEADS_PER_KV * PARTITION_SIZE * sizeof(float);
+  int outputs_size = NUM_Q_HEADS_PER_KV *
+                     ((NUM_QUERY_THREADS / WARP_SIZE) / 2) * head_size *
+                     sizeof(float);
 
-  // For paged attention v2 kernel.
-  dim3 grid(num_heads, num_seqs, max_num_partitions);
+  // For paged attention v3 kernel.
+  dim3 grid(num_heads / NUM_Q_HEADS_PER_KV, num_seqs, max_num_partitions);
   int shared_mem_size = std::max(logits_size, outputs_size);
-  // For paged attention v2 reduce kernel.
+  // For paged attention v3 reduce kernel.
   dim3 reduce_grid(num_heads, num_seqs);
   int reduce_shared_mem_size = 2 * max_num_partitions * sizeof(float);
 
-  dim3 block(NUM_THREADS);
+  dim3 block(NUM_QUERY_THREADS, NUM_Q_HEADS_PER_KV);
+  dim3 reduce_block(NUM_QUERY_THREADS);
   const at::cuda::OptionalCUDAGuard device_guard(device_of(query));
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   switch (head_size) {
@@ -107,31 +111,33 @@ void paged_attention_v2_launcher(
     // head sizes that we use in the model. However, we can easily extend this
     // to support any head size which is a multiple of 16.
     case 32:
-      LAUNCH_PAGED_ATTENTION_V2(32);
+      LAUNCH_PAGED_ATTENTION_V3(32);
       break;
     case 64:
-      LAUNCH_PAGED_ATTENTION_V2(64);
+      LAUNCH_PAGED_ATTENTION_V3(64);
       break;
     case 80:
-      LAUNCH_PAGED_ATTENTION_V2(80);
+      LAUNCH_PAGED_ATTENTION_V3(80);
       break;
     case 96:
-      LAUNCH_PAGED_ATTENTION_V2(96);
+      LAUNCH_PAGED_ATTENTION_V3(96);
       break;
     case 112:
-      LAUNCH_PAGED_ATTENTION_V2(112);
+      LAUNCH_PAGED_ATTENTION_V3(112);
       break;
     case 120:
-      LAUNCH_PAGED_ATTENTION_V2(120);
+      LAUNCH_PAGED_ATTENTION_V3(120);
       break;
     case 128:
-      LAUNCH_PAGED_ATTENTION_V2(128);
+      LAUNCH_PAGED_ATTENTION_V3(128);
       break;
+    // TODO(Wenqin): if the head size is too big, we will run out shared memory
+    // when the context is too long?
     case 192:
-      LAUNCH_PAGED_ATTENTION_V2(192);
+      LAUNCH_PAGED_ATTENTION_V3(192);
       break;
     case 256:
-      LAUNCH_PAGED_ATTENTION_V2(256);
+      LAUNCH_PAGED_ATTENTION_V3(256);
       break;
     default:
       TORCH_CHECK(false, "Unsupported head size: ", head_size);
@@ -139,41 +145,55 @@ void paged_attention_v2_launcher(
   }
 }
 
-#define CALL_V2_LAUNCHER(T, CACHE_T, BLOCK_SIZE, KV_DTYPE, IS_BLOCK_SPARSE)   \
-  paged_attention_v2_launcher<T, CACHE_T, BLOCK_SIZE, KV_DTYPE,               \
-                              IS_BLOCK_SPARSE>(                               \
-      out, exp_sums, max_logits, tmp_out, query, key_cache, value_cache,      \
-      num_kv_heads, scale, block_tables, seq_lens, max_seq_len, alibi_slopes, \
-      k_scale, v_scale, tp_rank, blocksparse_local_blocks,                    \
-      blocksparse_vert_stride, blocksparse_block_size,                        \
+#define CALL_V3_LAUNCHER(T, CACHE_T, BLOCK_SIZE, KV_DTYPE, NUM_Q_HEADS_PER_KV, \
+                         IS_BLOCK_SPARSE)                                      \
+  paged_attention_v3_launcher<T, CACHE_T, BLOCK_SIZE, KV_DTYPE,                \
+                              IS_BLOCK_SPARSE, NUM_Q_HEADS_PER_KV>(            \
+      out, exp_sums, max_logits, tmp_out, query, key_cache, value_cache,       \
+      num_kv_heads, scale, block_tables, seq_lens, max_seq_len, alibi_slopes,  \
+      k_scale, v_scale, tp_rank, blocksparse_local_blocks,                     \
+      blocksparse_vert_stride, blocksparse_block_size,                         \
       blocksparse_head_sliding_step);
 
-#define CALL_V2_LAUNCHER_SPARSITY(T, CACHE_T, BLOCK_SIZE, IS_FP8_KV_CACHE) \
+#define CALL_V3_LAUNCHER_SPARSITY(T, CACHE_T, BLOCK_SIZE, IS_FP8_KV_CACHE, \
+                                  NUM_Q_HEADS_PER_KV)                      \
   if (is_block_sparse) {                                                   \
-    CALL_V2_LAUNCHER(T, CACHE_T, BLOCK_SIZE, IS_FP8_KV_CACHE, true);       \
+    CALL_V3_LAUNCHER(T, CACHE_T, BLOCK_SIZE, IS_FP8_KV_CACHE,              \
+                     NUM_Q_HEADS_PER_KV, true);                            \
   } else {                                                                 \
-    CALL_V2_LAUNCHER(T, CACHE_T, BLOCK_SIZE, IS_FP8_KV_CACHE, false);      \
+    CALL_V3_LAUNCHER(T, CACHE_T, BLOCK_SIZE, IS_FP8_KV_CACHE,              \
+                     NUM_Q_HEADS_PER_KV, false);                           \
+  }
+
+#define CALL_V3_LAUNCHER_NUM_Q_HEADS_PER_VK(T, CACHE_T, BLOCK_SIZE, KV_DTYPE)  \
+  switch (q_heads_per_kv) {                                                    \
+    case 8:                                                                    \
+      CALL_V3_LAUNCHER_SPARSITY(T, CACHE_T, BLOCK_SIZE, KV_DTYPE, 8);          \
+      break;                                                                   \
+    default:                                                                   \
+      TORCH_CHECK(false, "Unsupported q_heads_per_kv size: ", q_heads_per_kv); \
+      break;                                                                   \
   }
 
 // NOTE(woosuk): To reduce the compilation time, we omitted block sizes
 // 1, 2, 4, 64, 128, 256.
-#define CALL_V2_LAUNCHER_BLOCK_SIZE(T, CACHE_T, KV_DTYPE)         \
-  switch (block_size) {                                           \
-    case 8:                                                       \
-      CALL_V2_LAUNCHER_SPARSITY(T, CACHE_T, 8, KV_DTYPE);         \
-      break;                                                      \
-    case 16:                                                      \
-      CALL_V2_LAUNCHER_SPARSITY(T, CACHE_T, 16, KV_DTYPE);        \
-      break;                                                      \
-    case 32:                                                      \
-      CALL_V2_LAUNCHER_SPARSITY(T, CACHE_T, 32, KV_DTYPE);        \
-      break;                                                      \
-    default:                                                      \
-      TORCH_CHECK(false, "Unsupported block size: ", block_size); \
-      break;                                                      \
+#define CALL_V3_LAUNCHER_BLOCK_SIZE(T, CACHE_T, KV_DTYPE)            \
+  switch (block_size) {                                              \
+    case 8:                                                          \
+      CALL_V3_LAUNCHER_NUM_Q_HEADS_PER_VK(T, CACHE_T, 8, KV_DTYPE);  \
+      break;                                                         \
+    case 16:                                                         \
+      CALL_V3_LAUNCHER_NUM_Q_HEADS_PER_VK(T, CACHE_T, 16, KV_DTYPE); \
+      break;                                                         \
+    case 32:                                                         \
+      CALL_V3_LAUNCHER_NUM_Q_HEADS_PER_VK(T, CACHE_T, 32, KV_DTYPE); \
+      break;                                                         \
+    default:                                                         \
+      TORCH_CHECK(false, "Unsupported block size: ", block_size);    \
+      break;                                                         \
   }
 
-void paged_attention_v2(
+void paged_attention_v3(
     torch::Tensor& out,         // [num_seqs, num_heads, head_size]
     torch::Tensor& exp_sums,    // [num_seqs, num_heads, max_num_partitions]
     torch::Tensor& max_logits,  // [num_seqs, num_heads, max_num_partitions]
@@ -196,8 +216,10 @@ void paged_attention_v2(
     const int64_t blocksparse_vert_stride, const int64_t blocksparse_block_size,
     const int64_t blocksparse_head_sliding_step) {
   const bool is_block_sparse = (blocksparse_vert_stride > 1);
+  const int num_heads = query.size(1);
+  const int q_heads_per_kv = num_heads / num_kv_heads;
   DISPATCH_BY_KV_CACHE_DTYPE(query.dtype(), kv_cache_dtype,
-                             CALL_V2_LAUNCHER_BLOCK_SIZE)
+                             CALL_V3_LAUNCHER_BLOCK_SIZE)
 }
 
 #undef WARP_SIZE
