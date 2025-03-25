@@ -81,7 +81,6 @@ class P2pNcclPipe:
         tensor_id: str,
         remote_address: typing.Optional[str] = None,
     ):
-        # logger.info(f"Send To {remote_address=}, {tensor_id=}, {tensor.shape=}, {tensor.dtype=}")
         if remote_address is None:
             self.store[tensor_id] = tensor
         else:
@@ -99,18 +98,20 @@ class P2pNcclPipe:
             sock.send(pickle.dumps(data))
 
             response = sock.recv()
-            if response == b"0" and tensor is not None:
-                self._send(comm, tensor.to(self.device), rank ^ 1)
-                logger.info(
-                    "Send Tensor Success, %s 👉 %s, MyRank: %s, data: %s, tensor: %s",
-                    self.local_address, remote_address, rank, data, tensor)
+            if response != b"0" or tensor is None:
+                return
+
+            self._send(comm, tensor.to(self.device), rank ^ 1)
+            logger.info(
+                "Send Tensor, %s 👉 %s, MyRank: %s, data: %s, tensor: %s",
+                self.local_address, remote_address, rank, data, tensor)
 
     def recv_tensor(
         self,
         tensor_id: str,
         remote_address: typing.Optional[str] = None,
     ) -> torch.Tensor:
-        logger.info(f"Recv From {remote_address}, {tensor_id=}")
+        logger.info("Recv From %s, tensor_id: %s", remote_address, tensor_id)
 
         if tensor_id in self.store:
             return self.store.pop(tensor_id)
@@ -166,7 +167,7 @@ class P2pNcclPipe:
                     self._recv(comm, tensor, rank ^ 1)
                     self.store[tensor_id] = tensor
                     logger.info(
-                        "Recv Tensor Success, %s 👈 %s, MyRank: %s, data: %s, tensor: %s",
+                        "Recv Tensor, %s 👈 %s, rank: %s, data: %s, tensor: %s",
                         self.local_address, remote_address.decode(), rank,
                         data, tensor)
                 elif data["cmd"] == "GET":
