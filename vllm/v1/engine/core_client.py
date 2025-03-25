@@ -448,6 +448,12 @@ class SyncMPClient(MPClient):
     def execute_dummy_batch(self) -> None:
         self._call_utility("execute_dummy_batch")
 
+    def save_sharded_state(self,
+                           path: str,
+                           pattern: Optional[str] = None,
+                           max_size: Optional[int] = None) -> None:
+        self._call_utility("save_sharded_state", path, pattern, max_size)
+
 
 class AsyncMPClient(MPClient):
     """Asyncio-compatible client for multi-proc EngineCore."""
