@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import sys
 import traceback
 from itertools import chain
 from typing import TYPE_CHECKING, Optional
@@ -9,7 +10,7 @@ from vllm.plugins import load_plugins_by_group
 from vllm.utils import resolve_obj_by_qualname
 
 from .interface import _Backend  # noqa: F401
-from .interface import CpuArchEnum, Platform, PlatformEnum
+from .interface import CpuArchEnum, Platform, PlatformEnum, UnspecifiedPlatform
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +266,8 @@ def __getattr__(name: str):
         #    `current_platform` is only resolved after the plugins are loaded
         #    (we have tests for this, if any developer violate this, they will
         #    see the test failures).
+        if any(option in sys.argv for option in ("--help", "-h")):
+            return UnspecifiedPlatform()
         global _current_platform
         if _current_platform is None:
             platform_cls_qualname = resolve_current_platform_cls_qualname()
