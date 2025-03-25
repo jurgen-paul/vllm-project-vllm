@@ -45,6 +45,7 @@ def test(model, use_v1):
         print(f"Prompt: {prompt!r}, Generated text: {generated_text!r}")
 
     del llm
+    # I don't know how to exit v1 gracefully
 
 
 def process_warp(fn, /, *args, **kwargs):

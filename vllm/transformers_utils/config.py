@@ -23,6 +23,7 @@ from transformers.models.auto.image_processing_auto import (
 from transformers.models.auto.modeling_auto import (
     MODEL_FOR_CAUSAL_LM_MAPPING_NAMES)
 from transformers.utils import CONFIG_NAME as HF_CONFIG_NAME
+
 from vllm.envs import VLLM_MODEL_OVERWRITE_PATH, VLLM_USE_MODELSCOPE
 from vllm.logger import init_logger
 # yapf conflicts with isort for this block
