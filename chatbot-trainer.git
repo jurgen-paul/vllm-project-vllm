@@ -1,0 +1,238 @@
+uv pip install trl
+git clone https://github.com/huggingface/trl.git
+cd trl/
+pip install -e .
+pip install -e ".[dev]"
+
+# 0. imports
+import torch
+from transformers import GPT2Tokenizer
+
+from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
+
+
+# 1. load a pretrained model
+model = AutoModelForCausalLMWithValueHead.from_pretrained("gpt2")
+ref_model = AutoModelForCausalLMWithValueHead.from_pretrained("gpt2")
+tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+tokenizer.pad_token = tokenizer.eos_token
+
+# 2. initialize trainer
+ppo_config = {"mini_batch_size": 1, "batch_size": 1}
+config = PPOConfig(**ppo_config)
+ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer)
+
+# 3. encode a query
+query_txt = "This morning I went to the "
+query_tensor = tokenizer.encode(query_txt, return_tensors="pt").to(model.pretrained_model.device)
+
+# 4. generate model response
+generation_kwargs = {
+    "min_length": -1,
+    "top_k": 0.0,
+    "top_p": 1.0,
+    "do_sample": True,
+    "pad_token_id": tokenizer.eos_token_id,
+    "max_new_tokens": 20,
+}
+response_tensor = ppo_trainer.generate([item for item in query_tensor], return_prompt=False, **generation_kwargs)
+response_txt = tokenizer.decode(response_tensor[0])
+
+# 5. define a reward for response
+# (this could be any reward such as human feedback or output from another model)
+reward = [torch.tensor(1.0, device=model.pretrained_model.device)]
+
+# 6. train model with ppo
+train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
+
+
+# .. Let's assume we have a trained model using `PPOTrainer` and `AutoModelForCausalLMWithValueHead`
+
+# push the model on the Hub
+model.push_to_hub("my-fine-tuned-model-ppo")
+
+# or save it locally
+model.save_pretrained("my-fine-tuned-model-ppo")
+
+# load the model from the Hub
+from transformers import AutoModelForCausalLM
+
+model = AutoModelForCausalLM.from_pretrained("my-fine-tuned-model-ppo")
+
+from trl.model import AutoModelForCausalLMWithValueHead
+
+model = AutoModelForCausalLMWithValueHead.from_pretrained("my-fine-tuned-model-ppo")
+
+# Language modeling
+language_modeling_example = {"text": "The sky is blue."}
+# Preference
+preference_example = {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."}
+# Unpaired preference
+unpaired_preference_example = {"prompt": "The sky is", "completion": " blue.", "label": True}
+
+messages = [
+    {"role": "user", "content": "Hello, how are you?"},
+    {"role": "assistant", "content": "I'm doing great. How can I help you today?"},
+    {"role": "user", "content": "I'd like to show off how chat templating works!"},
+]
+
+# Prompt-completion
+prompt_completion_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}],
+                             "completion": [{"role": "assistant", "content": "It is blue."}]}
+# Preference
+preference_example = {
+    "prompt": [{"role": "user", "content": "What color is the sky?"}],
+    "chosen": [{"role": "assistant", "content": "It is blue."}],
+    "rejected": [{"role": "assistant", "content": "It is green."}],
+}
+
+messages = [
+    {"role": "user", "content": "Turn on the living room lights."},
+    {"role": "assistant", "tool_calls": [
+        {"type": "function", "function": {
+            "name": "control_light",
+            "arguments": {"room": "living room", "state": "on"}
+        }}]
+    },
+    {"role": "tool", "name": "control_light", "content": "The lights in the living room are now on."},
+    {"role": "assistant", "content": "Done!"}
+]
+
+from transformers.utils import get_json_schema
+
+def control_light(room: str, state: str) -> str:
+    """
+    Controls the lights in a room.
+
+    Args:
+        room: The name of the room.
+        state: The desired state of the light ("on" or "off").
+
+    Returns:
+        str: A message indicating the new state of the lights.
+    """
+    return f"The lights in {room} are now {state}."
+
+# Generate JSON schema
+json_schema = get_json_schema(control_light)
+
+{
+    "type": "function",
+    "function": {
+        "name": "control_light",
+        "description": "Controls the lights in a room.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "room": {"type": "string", "description": "The name of the room."},
+                "state": {"type": "string", "description": 'The desired state of the light ("on" or "off").'},
+            },
+            "required": ["room", "state"],
+        },
+        "return": {"type": "string", "description": "str: A message indicating the new state of the lights."},
+    },
+}
+
+{"messages": messages, "tools": [json_schema]}
+
+# Standard format
+language_modeling_example = {"text": "The sky is blue."}
+# Conversational format
+language_modeling_example = {"messages": [
+    {"role": "user", "content": "What color is the sky?"},
+    {"role": "assistant", "content": "It is blue."}
+]}
+
+# Standard format
+prompt_only_example = {"prompt": "The sky is"}
+# Conversational format
+prompt_only_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
+
+
+from transformers import AutoTokenizer
+from trl import apply_chat_template
+
+tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
+
+# Example for prompt-only type
+prompt_only_example = {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
+apply_chat_template(prompt_only_example, tokenizer)
+# Output: {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n'}
+
+# Example for language modeling type
+lm_example = {"messages": [{"role": "user", "content": "What color is the sky?"}]}
+apply_chat_template(lm_example, tokenizer)
+# Output: {'text': '<|user|>\nWhat color is the sky?<|end|>\n<|endoftext|>'}
+
+# imports
+from datasets import load_dataset
+from trl import SFTTrainer
+
+# get dataset
+dataset = load_dataset("imdb", split="train")
+
+# get trainer
+trainer = SFTTrainer(
+    "facebook/opt-350m",
+    train_dataset=dataset,
+    dataset_text_field="text",
+    max_seq_length=512,
+)
+
+# train
+trainer.train()
+
+# imports
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from trl import RewardTrainer
+
+# load model and dataset - dataset needs to be in a specific format
+model = AutoModelForSequenceClassification.from_pretrained("gpt2", num_labels=1)
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+
+...
+
+# load trainer
+trainer = RewardTrainer(
+    model=model,
+    tokenizer=tokenizer,
+    train_dataset=dataset,
+)
+
+# train
+trainer.train()
+
+# imports
+import torch
+from transformers import AutoTokenizer
+from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead, create_reference_model
+from trl.core import respond_to_batch
+
+# get models
+model = AutoModelForCausalLMWithValueHead.from_pretrained('gpt2')
+model_ref = create_reference_model(model)
+
+tokenizer = AutoTokenizer.from_pretrained('gpt2')
+
+# initialize trainer
+ppo_config = PPOConfig(
+    batch_size=1,
+)
+
+# encode a query
+query_txt = "This morning I went to the "
+query_tensor = tokenizer.encode(query_txt, return_tensors="pt")
+
+# get model response
+response_tensor  = respond_to_batch(model, query_tensor)
+
+# create a ppo trainer
+ppo_trainer = PPOTrainer(ppo_config, model, model_ref, tokenizer)
+
+# define a reward for response
+# (this could be any reward such as human feedback or output from another model)
+reward = [torch.tensor(1.0)]
+
+# train model for one step with ppo
+train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
+
